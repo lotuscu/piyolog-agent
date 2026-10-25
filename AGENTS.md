@@ -17,12 +17,14 @@ Unofficial local tool, not affiliated with PiyoLog. It lets a parent point any a
 
 Do these steps in order. The parent talks to you only through chat; they cannot run shell commands or edit files on your machine themselves, so do the file work yourself.
 
-1. **Get the code** into `~/workspace/piyolog-briefing/` (persistent; never `/tmp`).
-   - First try: `git clone https://github.com/lotuscu/piyolog-agent.git ~/workspace/piyolog-briefing`
+For an existing installation, reuse its actual checkout directory and existing secrets, data, and scheduled paths. The paths below are defaults for new installations, not instructions to create a second copy or discard existing history.
+
+1. **Get the code** into `~/workspace/piyolog-agent/` (persistent; never `/tmp`).
+   - First try: `git clone https://github.com/lotuscu/piyolog-agent.git ~/workspace/piyolog-agent`
    - If git fails for lack of credentials (common when the repository is private for this user, or git has no login on your machine): use your GitHub connector instead. With `get_file_contents` on `lotuscu/piyolog-agent`, list the root at the target ref, recurse into `docs/`, `skills/piyolog/`, `tests/`, and `tests/fixtures/`, and download every file to the same relative path. Verify each file's size matches the listing before continuing. Do not conclude the repository is unreachable from a failed `git clone` alone.
 2. **Install the skill**: copy `skills/piyolog/SKILL.md` to `~/workspace/custom-skills/piyolog/SKILL.md`. That directory is where Muse loads custom skills from; leaving the file inside the repository is not an installation.
 3. **Receive the secret**: ask the parent to create a feed in the PiyoLog app (Settings → Data Feed → Create New Feed) and send you the URL in chat — in Muse that is the only channel they have. Then:
-   - Write it, exactly one line, to `~/workspace/piyolog-briefing/.feed_url` with a file write that does not echo it anywhere, and set permissions `chmod 600 .feed_url`.
+   - Write it, exactly one line, to `~/workspace/piyolog-agent/.feed_url` with a file write that does not echo it anywhere, and set permissions `chmod 600 .feed_url`.
    - Never run a command whose arguments contain the URL (command lines get logged). `fetch.py` refuses URLs in argv anyway.
    - Tell the parent once: the URL has passed through chat, a feed can be revoked and recreated in the app at any time, and a free feed expires 90 days after creation anyway. Do not repeat the warning on every run.
 4. **Verify** before telling the parent it works:
@@ -30,7 +32,7 @@ Do these steps in order. The parent talks to you only through chat; they cannot 
    - `python3 fetch.py` — expect `fetched=N inserted=N` with no URL in the output. Run it a second time: expect `inserted=0 updated=N` (deduplication works).
    - `python3 summarize.py --days 2 --format both` — show the parent the resulting briefing (see `docs/routine.md`).
    - Paths are anchored to the repository directory, so the scripts work from any working directory. Still use absolute paths in scheduled jobs.
-5. **Schedule it**: create two scheduled jobs (Muse crons) at about 06:00 and 17:00 in the parent's timezone. Each job's instructions must say: run `python3 ~/workspace/piyolog-briefing/fetch.py`, then `python3 ~/workspace/piyolog-briefing/summarize.py --days 2 --format both`, then send the parent a briefing shaped like `docs/routine.md`. If fetch returns any nonzero exit status, stop the normal briefing and report the failure; do not present old local data as current. For HTTP 401/404, follow the feed-unavailable guidance below. Use `fetch.py && summarize.py` semantics, never run the summary unconditionally after a failure. A free feed covers only ~24 hours, so the twice-daily overlap is what keeps the local history complete.
+5. **Schedule it**: create two scheduled jobs (Muse crons) at about 06:00 and 17:00 in the parent's timezone. Each job's instructions must say: run `python3 ~/workspace/piyolog-agent/fetch.py`, then `python3 ~/workspace/piyolog-agent/summarize.py --days 2 --format both`, then send the parent a briefing shaped like `docs/routine.md`. If fetch returns any nonzero exit status, stop the normal briefing and report the failure; do not present old local data as current. For HTTP 401/404, follow the feed-unavailable guidance below. Use `fetch.py && summarize.py` semantics, never run the summary unconditionally after a failure. A free feed covers only ~24 hours, so the twice-daily overlap is what keeps the local history complete.
 6. **Postgres only if the parent asks** (for example Neon). See `docs/postgres.md`. On Muse your machine has no `psql` and no `psycopg` preinstalled; the doc gives the exact venv install that works. Never invent a connection string, and never write one into the repo.
 
 ## Setup on other agents

@@ -19,7 +19,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-USER_AGENT = "piyolog-briefing/0.1 (personal local summary)"
+USER_AGENT = "piyolog-agent/0.1 (personal local summary)"
 DEFAULT_TZ = "Asia/Tokyo"
 MILK_TYPES = ("Formula", "ExpressedBreastMilk", "BreastFeeding", "Pumping")
 DIAPER_TYPES = ("Pee", "Poop")

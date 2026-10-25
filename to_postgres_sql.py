@@ -6,9 +6,9 @@ files written by fetch.py. Apply the SQL yourself with psql and DATABASE_URL,
 or use `python3 fetch.py --backend postgres`.
 
 Examples:
-  python3 to_neon_sql.py
-  python3 to_neon_sql.py --all
-  python3 to_neon_sql.py --data-dir data --sql-dir sql snapshot.json
+  python3 to_postgres_sql.py
+  python3 to_postgres_sql.py --all
+  python3 to_postgres_sql.py --data-dir data --sql-dir sql snapshot.json
 """
 
 from __future__ import annotations
@@ -31,9 +31,9 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         epilog=(
             "examples:\n"
-            "  python3 to_neon_sql.py\n"
-            "  python3 to_neon_sql.py --all\n"
-            "  python3 to_neon_sql.py --data-dir data --sql-dir sql snapshot.json\n"
+            "  python3 to_postgres_sql.py\n"
+            "  python3 to_postgres_sql.py --all\n"
+            "  python3 to_postgres_sql.py --data-dir data --sql-dir sql snapshot.json\n"
             "\n"
             "Apply with psql and DATABASE_URL, or use: python3 fetch.py --backend postgres"
         ),

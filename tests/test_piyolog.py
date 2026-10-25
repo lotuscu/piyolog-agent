@@ -311,9 +311,9 @@ class CliDefaultsTests(unittest.TestCase):
         # example a scheduled job). Defaults must not depend on the cwd.
         import fetch
         import summarize
-        import to_neon_sql
+        import to_postgres_sql
 
-        for module in (fetch, summarize, to_neon_sql):
+        for module in (fetch, summarize, to_postgres_sql):
             args = module.build_parser().parse_args([])
             data_dir = Path(args.data_dir)
             self.assertTrue(data_dir.is_absolute(), module.__name__)

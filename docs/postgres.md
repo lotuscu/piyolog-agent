@@ -19,7 +19,7 @@ A driver must already be present: the tool tries `psycopg`, then `psycopg2`, the
 **On Muse** none of those is preinstalled. This works (verified October 2026, psycopg 3.3.6):
 
 ```bash
-cd ~/workspace/piyolog-briefing
+cd ~/workspace/piyolog-agent
 python3 -m venv .venv
 .venv/bin/pip install 'psycopg[binary]'
 DATABASE_URL='...' .venv/bin/python fetch.py --backend postgres
@@ -27,10 +27,12 @@ DATABASE_URL='...' .venv/bin/python fetch.py --backend postgres
 
 Use the venv inside the repository (`.venv/` is gitignored): installs in system or temporary locations do not survive a machine reset. Pure-Python `pg8000` is **not** supported by this tool.
 
-`python3 to_neon_sql.py` only builds the SQL files from snapshots; it does not connect. Apply them yourself with:
+`to_postgres_sql.py` replaces the former `to_neon_sql.py` command; update any existing jobs that call the old name. It works with Postgres generally, not only Neon.
+
+`python3 to_postgres_sql.py` only builds the SQL files from snapshots; it does not connect. Apply them yourself with:
 
 ```bash
-python3 to_neon_sql.py --data-dir data --sql-dir sql   # or --all for every snapshot
+python3 to_postgres_sql.py --data-dir data --sql-dir sql   # or --all for every snapshot
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/upsert.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/fetchlog.sql
 ```
