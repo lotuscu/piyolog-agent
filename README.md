@@ -1,99 +1,160 @@
-# piyolog-briefing
+# PiyoLog briefing
 
-A small personal pipeline that pulls a piyolog 24-hour JSON feed twice a day, upserts the records into Neon serverless Postgres, and leaves a short parent briefing for a local assistant to write.
+Unofficial local tools that let a parent point an AI agent at their own [PiyoLog](https://www.piyolog.com/app/piyolog/data_feed/en/index.html) data feed and get a repeatable daily summary.
 
-## What it does
+**This project is not affiliated with, endorsed by, or maintained by the makers of PiyoLog.** PiyoLog is their product. This repository only fetches the feed the parent creates and summarizes it on their machine.
 
-1. Save the feed response as a JSON snapshot.
-2. Turn that snapshot into idempotent SQL.
-3. Upsert rows into Neon.
-4. Draft a short briefing from the stored rows (Feeding, Sleep, and Diaper lines, plus a few sentences). The briefing itself stays on the machine that runs the assistant. This repository does not contain briefing text, topic logs, or schedule notes.
+An agent that will run this project should read [AGENTS.md](AGENTS.md) once and then follow it. Humans can start below.
 
-## Architecture
+The feed URL is a password. Do not commit it, paste it into a public issue, or leave it in a screenshot.
 
-```
-piyolog 24h feed
-    -> JSON snapshot (data/YYYYMMDD_HHMM.json)
-    -> SQL generator (to_neon_sql.py)
-    -> Neon serverless Postgres
-    -> short parent briefing (local, not committed)
-```
+## Quick start
 
-`to_neon_sql.py` does not connect to the network and does not read credentials. It only reads snapshot files and writes SQL.
+You need Python 3.9 or newer. There is nothing to install.
 
-## Database
+**1. Create a feed in the PiyoLog app and copy the URL.**
 
-The database is Neon serverless Postgres in Singapore, region `aws-ap-southeast-1`.
+On iOS: Settings, Data Feed, Create New Feed. Pick the child, a time range, and an expiration, then copy the URL from the feed details screen. There is no separate API key. The URL is the credential.
 
-Tables:
-
-- `public.piyolog_records` stores one row per event. `event_id` is the primary key. When the feed omits `event_id`, the generator uses `md5(type|datetime)`. `amount_ml` is the millilitre amount for formula or expressed breast milk. `left_sec` and `right_sec` are rounded breast-feeding seconds. `memo` holds free text (for example solid food). `details` holds extra text such as stool notes. `raw` keeps the original JSON object. `first_seen_at` and `last_seen_at` default to `now()`. A repeat of the same `event_id` updates the row and sets `last_seen_at` to `now()`, and leaves `first_seen_at` unchanged.
-- `public.piyolog_fetch_log` stores one row per snapshot file. `id` is an identity column. `fetched_at` defaults to `now()`. `source_file` is unique. Loading the same file again does nothing.
-
-Index: `(type, recorded_at)` on `public.piyolog_records`.
-
-`schema.sql` creates both tables with `CREATE TABLE IF NOT EXISTS` and is safe to re-run.
-
-## Connect
-
-Use your own Neon project. Do not commit the connection string, project id, branch id, or feed URL.
-
-1. Create a Neon project in the Neon console (Singapore, `aws-ap-southeast-1`, if you want the same region).
-2. Copy the connection string from the Neon console.
-3. Export it as `DATABASE_URL` (see `.env.example` for the variable name). Put secrets in `.env` or your shell, not in git.
-4. Apply the schema:
+**2. Save that URL locally, not in git.**
 
 ```bash
-psql "$DATABASE_URL" -f schema.sql
+git clone https://github.com/lotuscu/piyolog-briefing.git
+cd piyolog-briefing
+printf '%s\n' 'PASTE-YOUR-FEED-URL-HERE' > .feed_url
 ```
 
-Or send the statements in `schema.sql` through Neon MCP `run_sql_transaction` on your project.
+Or export `PIYOLOG_FEED_URL` in the shell. `.feed_url` and `.env` are gitignored. Names are listed in `.env.example`.
 
-After the generator runs, apply `sql/upsert.sql` and `sql/fetchlog.sql` in one transaction the same way (`psql`, or Neon MCP `run_sql_transaction` with those two statements).
-
-## Run the script
-
-Default paths match the previous layout:
-
-- snapshots: `/workspace/piyolog/data`
-- generated SQL: `/workspace/piyolog/sql/upsert.sql` and `fetchlog.sql`
-
-Override them with `--data-dir` / `--sql-dir`, or with `PIYOLOG_DATA_DIR` / `PIYOLOG_SQL_DIR`. For a checkout of this repo:
+**3. Fetch the feed and print today's summary.**
 
 ```bash
-mkdir -p data sql
-# Save the feed yourself to data/YYYYMMDD_HHMM.json.
-# Keep the URL in PIYOLOG_FEED_URL or in an untracked .feed_url file.
-
-python3 to_neon_sql.py --data-dir data --sql-dir sql
-python3 to_neon_sql.py --data-dir data --sql-dir sql --all
-python3 to_neon_sql.py --data-dir data --sql-dir sql 20260101_0600.json
+python3 fetch.py
+python3 summarize.py --days 1
 ```
 
-With no file arguments the script uses the newest `*.json` in the data directory. `--all` reads every JSON file in that directory. Later files win when the same `event_id` appears more than once.
+A free feed expires 90 days after you create it. When it does, `fetch.py` tells you to make a new one. It does not print the URL.
 
-The script prints `files=<n> unique_records=<n>`.
+`fetch.py` writes a timestamped snapshot plus a deduplicated store under `data/`:
 
-## Briefing flow
+- `records.jsonl` is the canonical store (one record per line, keyed by `event_id`)
+- `records.csv` is a flat view
+- `records.sqlite` is a SQLite file (stdlib) with the same rows
 
-See `docs/routine.md`. Twice a day (06:00 and 17:00 Asia/Tokyo) the assistant loads the new rows, compares them with recent days, and writes a short briefing:
+Run `fetch.py` about twice a day. A free feed only returns the last 24 hours, so a longer gap can drop records that will not appear again. The store keeps what you have already fetched and updates a row when the same `event_id` shows up again.
 
-- three fragment lines: Feeding, Sleep, and Diaper
-- one to three sentences, including one age-appropriate caution on a rotating topic
-- an explicit flag only when milk intake or sleep is clearly insufficient, or when there are signs of fever or illness
+Day boundaries use `PIYOLOG_TZ`, or `Asia/Tokyo` when that is unset. Feed timestamps are UTC.
 
-Topic names, vaccine or checkup dates, and the briefing text belong in local files (`topics.log`, `schedule.md`, `briefings/`). Those paths are gitignored.
+## Example prompt
 
-## Files
+Paste this into Grok Bot, Muse, Dot, Claude, ChatGPT, Cursor, or another agent after the URL is in the environment or in `.feed_url`:
 
-| Path | Role |
+```
+You have the piyolog-briefing repository. Read AGENTS.md and follow it.
+
+My PiyoLog feed URL is already in PIYOLOG_FEED_URL or in .feed_url. Treat that URL as a password: never print it, log it, commit it, or send it anywhere.
+
+1. Run: python3 fetch.py
+2. Run: python3 summarize.py --days 2 --format both
+3. Write a short briefing with one line for Feeding, one line for Sleep, one line for Diaper, then one to three sentences.
+4. Use only numbers from the summary. Do not invent records.
+5. This is not medical advice. You may point out when logged milk or sleep looks low, or when temperature, vomiting, rash, cough, injury, medicine, or a hospital visit is present. I will decide what to do, with my child's clinician if needed.
+6. If fetch.py says the feed is unavailable, stop and tell me to create a new data feed in the PiyoLog app. Do not guess a URL.
+```
+
+The same routine is written out in [docs/routine.md](docs/routine.md). A skill file for agents that load skills is [skills/piyolog/SKILL.md](skills/piyolog/SKILL.md).
+
+## How to get the feed URL
+
+Checked against the official guide in October 2026. These pages loaded:
+
+- [Data Feed: user guide and data specification (English)](https://www.piyolog.com/app/piyolog/data_feed/en/index.html)
+- [Official guide (Japanese)](https://www.piyolog.com/app/piyolog/data_feed/ja/index.html)
+- [Developer announcement, 15 September 2026, PiyoLog v9.4.0](https://note.com/y_sakaki/n/nb47c50c0f490)
+
+What that guide says, in short:
+
+- The feature is a read-only HTTPS GET. You create the URL in the iOS app under Settings, Data Feed. Creating a feed needs an administrator on the account.
+- You choose one child, a time range, and an expiration. Those cannot be edited later. Revoke the feed and create a new one to change them.
+- A free account can have one feed, covering 24 hours, expiring 90 days after creation.
+- Premium can have up to five feeds, with a range of 24 hours, 3 days, 7 days, or 28 days, and an expiration of 90 days, 365 days, or none. A feed with no expiration still needs an active Premium entitlement.
+- The URL itself is the secret. Do not post it. If it leaks, revoke it. Revoking does not delete copies another tool already saved.
+- Timestamps are ISO 8601 UTC. The guide's record types are fixed English strings (`Formula`, `BreastFeeding`, `Sleep`, `WakeUp`, `Pee`, `Poop`, `Solid`, and others). The full field list is on the official page.
+- `Sleep` and `WakeUp` are separate records. The feed does not include a sleep duration.
+- Solid food is not a structured menu. The text is in `memo`.
+- The feed does not include the child's name, birth date, sex, photos, diary, or vaccine names.
+- HTTP 404 with error code `feed_unavailable` covers an expired feed, a revoked feed, a paused Premium feed, a wrong URL, and a deleted child. A new feed can also return 404 for a short time right after creation.
+- A 24-hour feed is cached for about a minute. The guide asks you not to hit the same URL more than about once a minute. Twice a day is enough.
+
+`fetch.py` treats HTTP 401 the same as HTTP 404 and tells you to create a new feed. The published guide documents 404 for an unavailable feed, not 401.
+
+## What the summary means
+
+`summarize.py` prints Markdown, JSON, or both (`--format md|json|both`). `--from` and `--to` are inclusive local dates. `--days 2` is yesterday and today in the selected timezone.
+
+Per day it reports:
+
+| Section | Rule |
 | --- | --- |
-| `to_neon_sql.py` | Build upsert SQL from snapshots |
-| `schema.sql` | Tables and index |
-| `docs/routine.md` | Twice-daily flow |
+| Milk | Millilitres for `Formula`, `ExpressedBreastMilk`, `BreastFeeding`, and `Pumping`, only when the feed sends a positive `ml` value. Duration is not turned into millilitres. Pumping is not counted as a bottle the baby drank. |
+| Breastfeeding | `leftTime` plus `rightTime`, in minutes. The feed sends seconds. |
+| Sleep | Each `Sleep` is paired with the next later `WakeUp`. The daily total is the part of those stretches that falls on that local date. The longest stretch is the full pair, even when it crosses midnight. An unpaired start or wake is omitted. |
+| Diapers | Pee count, poop count, the longest gap that ends at a pee or poop that day, and the longest poop-to-poop gap that ends that day. |
+| Solids | Labels split from the `Solid` memo on commas, semicolons, and new lines. `first_seen` is the earliest local date that label appears in the loaded history, which can be before the requested range. |
+| Temperature and other counts | Max Celsius when a `Temperature` record has a value, plus counts of vomiting, rash, cough, medicine, hospital, and injury. |
+
+The JSON repeats those rules in a `notes` array and includes a disclaimer. Missing numbers are omitted values from the feed, not zeros you should invent. A day with no logged milk shows zeros because nothing in that category was present.
+
+## Commands
+
+```bash
+python3 fetch.py
+python3 fetch.py --tz Asia/Tokyo --data-dir data
+python3 summarize.py --days 2 --format both
+python3 summarize.py --from 2026-09-08 --to 2026-09-09 --format json
+python3 -m unittest discover -s tests -t . -v
+```
+
+`tests/fixtures/synthetic_feed.json` is fictional and is the only JSON file intended to be committed. Do not replace it with real records.
+
+If `event_id` is missing, the store key is `md5(type|datetime)` using the timestamp string from the feed. The current feed spec says `event_id` is always present. The fallback is there so an older or partial file still deduplicates.
+
+## Optional Postgres
+
+The default backend is local files. Postgres is not required and is not used by `summarize.py`.
+
+If you want a copy in your own Postgres database, including Neon, set `DATABASE_URL` from that project's console and run:
+
+```bash
+python3 fetch.py --backend postgres
+```
+
+That still writes the local store, then applies `schema.sql` plus an idempotent upsert when `psycopg`, `psycopg2`, or `psql` is available. Details are in [docs/postgres.md](docs/postgres.md). `to_neon_sql.py` only generates `sql/upsert.sql` and `sql/fetchlog.sql` from snapshots. It does not connect.
+
+Do not commit the connection string.
+
+## Layout
+
+| Path | Purpose |
+| --- | --- |
+| `fetch.py` | Download the feed, save a snapshot, update the local store |
+| `summarize.py` | Per-day Markdown and JSON |
+| `piyolog.py` | Shared library (stdlib only) |
+| `to_neon_sql.py` | Optional SQL generator |
+| `schema.sql` | Optional Postgres tables |
+| `AGENTS.md` | Instructions for an assistant |
+| `docs/routine.md` | Generic twice-daily briefing |
+| `docs/postgres.md` | Optional database |
+| `skills/piyolog/SKILL.md` | Short skill for agents that load skills |
+| `tests/fixtures/synthetic_feed.json` | Fake records for tests |
 | `.env.example` | Variable names only |
-| `.gitignore` | Snapshots, generated SQL, secrets, daily summaries |
 
-## Security
+## Tests
 
-This repository holds placeholders only. Ignored paths include `data/`, `sql/*.sql`, `*.json`, `.feed_url`, `.env`, `topics.log`, `schedule.md`, `briefings/`, `summaries/`, and `daily/`.
+```bash
+python3 -m unittest discover -s tests -t . -v
+```
+
+## License
+
+[MIT](LICENSE).

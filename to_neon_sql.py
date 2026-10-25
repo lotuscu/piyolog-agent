@@ -1,65 +1,100 @@
 #!/usr/bin/env python3
-"""Build upsert SQL for Neon from piyolog snapshot files (no credentials involved).
-Usage: python3 to_neon_sql.py [file.json ...]   (default: latest file in data/)
-       python3 to_neon_sql.py --all
-       python3 to_neon_sql.py --data-dir DIR --sql-dir DIR [file.json ...|--all]
+"""Build idempotent Postgres upsert SQL from PiyoLog snapshot files.
 
-Data directory: --data-dir, else PIYOLOG_DATA_DIR, else /workspace/piyolog/data.
-SQL directory:  --sql-dir,  else PIYOLOG_SQL_DIR,  else /workspace/piyolog/sql.
-Writes <sql-dir>/upsert.sql and <sql-dir>/fetchlog.sql;
-then run them via Neon MCP run_sql_transaction with
-sql_statements = ["$file:<sql-dir>/upsert.sql", "$file:<sql-dir>/fetchlog.sql"]
+No credentials are read. This path is optional. The default store is the local
+files written by fetch.py. Apply the SQL yourself with psql and DATABASE_URL,
+or use `python3 fetch.py --backend postgres`.
+
+Examples:
+  python3 to_neon_sql.py
+  python3 to_neon_sql.py --all
+  python3 to_neon_sql.py --data-dir data --sql-dir sql snapshot.json
 """
-import json, glob, os, sys, hashlib
 
-def _parse_cli(argv):
-    data_dir = os.environ.get('PIYOLOG_DATA_DIR') or '/workspace/piyolog/data'
-    sql_dir = os.environ.get('PIYOLOG_SQL_DIR') or '/workspace/piyolog/sql'
-    positional = []
-    i = 0
-    while i < len(argv):
-        a = argv[i]
-        if a in ('--data-dir', '--sql-dir'):
-            if i + 1 >= len(argv):
-                sys.exit(f'missing value for {a}')
-            if a == '--data-dir':
-                data_dir = argv[i + 1]
-            else:
-                sql_dir = argv[i + 1]
-            i += 2
-            continue
-        positional.append(a)
-        i += 1
-    return data_dir, sql_dir, positional
+from __future__ import annotations
 
-D, SQL_DIR, args = _parse_cli(sys.argv[1:])
-if args == ['--all']: files = sorted(glob.glob(f'{D}/*.json'))
-elif args: files = [a if os.path.isabs(a) else os.path.join(D, a) for a in args]
-else: files = sorted(glob.glob(f'{D}/*.json'))[-1:]
-recs, logs = {}, []
-for f in files:
-    d = json.load(open(f)); name = os.path.basename(f)
-    rs = d.get('records', [])
-    logs.append({'source_file': name, 'generated_at': d.get('generated_at'), 'record_count': len(rs)})
-    for r in rs:
-        eid = r.get('event_id') or hashlib.md5(f"{r.get('type')}|{r.get('datetime')}".encode()).hexdigest()
-        v = r.get('value'); amt = None
-        if isinstance(v, dict) and v.get('unit', 'ml') == 'ml': amt = v.get('value')
-        elif isinstance(v, (int, float)): amt = v
-        det = r.get('details')
-        recs[eid] = {'event_id': eid, 'recorded_at': r['datetime'], 'type': r['type'], 'amount_ml': amt,
-                     'left_sec': r.get('leftTime'), 'right_sec': r.get('rightTime'), 'memo': r.get('memo'),
-                     'details': json.dumps(det, ensure_ascii=False) if isinstance(det, (dict, list)) else det,
-                     'raw': r, 'source_file': name}
-q = lambda o: json.dumps(o, ensure_ascii=False).replace("'", "''")
-up = f"""INSERT INTO public.piyolog_records (event_id, recorded_at, type, amount_ml, left_sec, right_sec, memo, details, raw, source_file)
-SELECT x->>'event_id', (x->>'recorded_at')::timestamptz, x->>'type', (x->>'amount_ml')::numeric, round((x->>'left_sec')::numeric)::int, round((x->>'right_sec')::numeric)::int, x->>'memo', x->>'details', x->'raw', x->>'source_file'
-FROM jsonb_array_elements('{q(list(recs.values()))}'::jsonb) AS x
-ON CONFLICT (event_id) DO UPDATE SET recorded_at=EXCLUDED.recorded_at, type=EXCLUDED.type, amount_ml=EXCLUDED.amount_ml, left_sec=EXCLUDED.left_sec, right_sec=EXCLUDED.right_sec, memo=EXCLUDED.memo, details=EXCLUDED.details, raw=EXCLUDED.raw, source_file=EXCLUDED.source_file, last_seen_at=now()"""
-fl = f"""INSERT INTO public.piyolog_fetch_log (source_file, generated_at, record_count)
-SELECT x->>'source_file', (x->>'generated_at')::timestamptz, (x->>'record_count')::int FROM jsonb_array_elements('{q(logs)}'::jsonb) AS x
-ON CONFLICT (source_file) DO NOTHING"""
-os.makedirs(SQL_DIR, exist_ok=True)
-open(os.path.join(SQL_DIR, 'upsert.sql'), 'w').write(up)
-open(os.path.join(SQL_DIR, 'fetchlog.sql'), 'w').write(fl)
-print(f'files={len(files)} unique_records={len(recs)}')
+import argparse
+import os
+import sys
+from pathlib import Path
+
+import piyolog
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description=(
+            "Build idempotent Postgres upsert SQL from PiyoLog snapshot files. "
+            "No credentials are read. Local files from fetch.py are the default store."
+        ),
+        epilog=(
+            "examples:\n"
+            "  python3 to_neon_sql.py\n"
+            "  python3 to_neon_sql.py --all\n"
+            "  python3 to_neon_sql.py --data-dir data --sql-dir sql snapshot.json\n"
+            "\n"
+            "Apply with psql and DATABASE_URL, or use: python3 fetch.py --backend postgres"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument(
+        "--data-dir",
+        default=os.environ.get("PIYOLOG_DATA_DIR") or "data",
+        help="Directory of snapshot JSON files (default: data, or PIYOLOG_DATA_DIR).",
+    )
+    parser.add_argument(
+        "--sql-dir",
+        default=os.environ.get("PIYOLOG_SQL_DIR") or "sql",
+        help="Where to write upsert.sql and fetchlog.sql (default: sql, or PIYOLOG_SQL_DIR).",
+    )
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Read every snapshot JSON in the data directory. Later files win on the same event_id.",
+    )
+    parser.add_argument(
+        "files",
+        nargs="*",
+        help="Snapshot filenames. Relative names are resolved inside the data directory. Default: the newest snapshot.",
+    )
+    return parser
+
+
+def snapshot_paths(data_dir: str, read_all: bool, files: list[str]) -> list[Path]:
+    root = Path(data_dir)
+    if read_all:
+        return sorted(path for path in root.glob("*.json") if path.is_file())
+    if files:
+        paths = []
+        for name in files:
+            candidate = Path(name)
+            paths.append(candidate if candidate.is_absolute() else root / name)
+        return paths
+    found = sorted(path for path in root.glob("*.json") if path.is_file())
+    return found[-1:]
+
+
+def main(argv: list[str] | None = None) -> int:
+    args_list = list(sys.argv[1:] if argv is None else argv)
+    piyolog.reject_url_on_argv(args_list)
+    args = build_parser().parse_args(args_list)
+    if args.all and args.files:
+        print("Pass either --all or file names, not both.", file=sys.stderr)
+        return 2
+    paths = snapshot_paths(args.data_dir, args.all, args.files)
+    try:
+        records, logs = piyolog.collect_snapshot_files(paths)
+    except FileNotFoundError as exc:
+        print(f"Snapshot not found: {exc.filename}", file=sys.stderr)
+        return 2
+    except piyolog.FeedError as exc:
+        print(exc, file=sys.stderr)
+        return exc.exit_code
+    upsert, fetch_log = piyolog.build_sql(records, logs)
+    piyolog.write_sql_files(Path(args.sql_dir), upsert, fetch_log)
+    print(f"files={len(paths)} unique_records={len(records)}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

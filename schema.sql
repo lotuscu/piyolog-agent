@@ -1,8 +1,9 @@
--- Piyolog tables for Neon serverless Postgres (Singapore, aws-ap-southeast-1).
--- Idempotent. Apply with: psql "$DATABASE_URL" -f schema.sql
--- Or send each statement through Neon MCP run_sql_transaction.
--- Records upsert on event_id (update last_seen_at, keep first_seen_at).
--- Fetch log inserts once per source_file.
+-- Optional Postgres schema for a PiyoLog feed.
+-- The default store is local files written by fetch.py (JSONL, CSV, and SQLite).
+-- Apply this only if you opt in, for example on Neon or another Postgres:
+--   psql "$DATABASE_URL" -f schema.sql
+-- Safe to re-run. Records upsert on event_id and refresh last_seen_at.
+-- The fetch log inserts once per source file.
 
 CREATE TABLE IF NOT EXISTS public.piyolog_records (
     event_id      text PRIMARY KEY,

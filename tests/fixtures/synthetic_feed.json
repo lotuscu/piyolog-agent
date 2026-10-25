@@ -1,0 +1,87 @@
+{
+  "_comment": "SYNTHETIC FICTIONAL DATA for tests and examples. Not a real child. Not a real feed.",
+  "schema_version": 1,
+  "generated_at": "2026-09-09T00:00:00.000Z",
+  "range": {
+    "from": "2026-08-31T00:00:00.000Z",
+    "to": "2026-09-09T00:00:00.000Z"
+  },
+  "records": [
+    {
+      "event_id": "syn-solid-earlier",
+      "datetime": "2026-08-31T15:00:00Z",
+      "type": "Solid",
+      "memo": "rice porridge"
+    },
+    {
+      "event_id": "syn-formula-1",
+      "datetime": "2026-09-07T22:00:00Z",
+      "type": "Formula",
+      "value": { "value": 120, "unit": "ml" },
+      "memo": "Finished the bottle."
+    },
+    {
+      "event_id": "syn-breast-1",
+      "datetime": "2026-09-08T01:00:00Z",
+      "type": "BreastFeeding",
+      "last": "right",
+      "leftTime": 300,
+      "rightTime": 240,
+      "value": { "value": 80, "unit": "ml" }
+    },
+    {
+      "event_id": "syn-sleep-1",
+      "datetime": "2026-09-08T03:00:00Z",
+      "type": "Sleep"
+    },
+    {
+      "event_id": "syn-wake-1",
+      "datetime": "2026-09-08T05:00:00Z",
+      "type": "WakeUp"
+    },
+    {
+      "event_id": "syn-pee-1",
+      "datetime": "2026-09-08T06:00:00Z",
+      "type": "Pee"
+    },
+    {
+      "event_id": "syn-poop-1",
+      "datetime": "2026-09-08T08:00:00Z",
+      "type": "Poop",
+      "details": { "amount": "normal", "hardness": "soft", "color": "yellow" }
+    },
+    {
+      "event_id": "syn-temp-1",
+      "datetime": "2026-09-08T09:00:00Z",
+      "type": "Temperature",
+      "value": { "value": 37.4, "unit": "celsius" }
+    },
+    {
+      "event_id": "syn-solid-1",
+      "datetime": "2026-09-08T10:00:00Z",
+      "type": "Solid",
+      "memo": "rice porridge, steamed carrot"
+    },
+    {
+      "event_id": "syn-sleep-2",
+      "datetime": "2026-09-08T12:00:00Z",
+      "type": "Sleep"
+    },
+    {
+      "event_id": "syn-wake-2",
+      "datetime": "2026-09-08T18:00:00Z",
+      "type": "WakeUp"
+    },
+    {
+      "event_id": "syn-ebm-1",
+      "datetime": "2026-09-08T21:30:00Z",
+      "type": "ExpressedBreastMilk",
+      "value": { "value": 40, "unit": "ml" }
+    },
+    {
+      "datetime": "2026-09-08T22:00:00Z",
+      "type": "Pee",
+      "memo": "no event id on purpose"
+    }
+  ]
+}

@@ -1,15 +1,22 @@
-# Twice-daily briefing routine
+# Twice-daily briefing
 
-Runs at 06:00 and 17:00 Asia/Tokyo.
+This is a generic routine for any assistant. It is not a personal schedule and it does not contain sample briefing text.
 
-This file describes the flow only. Do not store briefing text, topic logs, schedule notes, or snapshot data in the repository.
+Suggested times are 06:00 and 17:00 in the parent's timezone. Any two times about half a day apart work. A free PiyoLog feed only covers the last 24 hours, so skipping more than a day can leave a gap that the feed will never send again.
 
-1. Fetch the piyolog 24-hour JSON feed. Keep the URL in `PIYOLOG_FEED_URL` or in a local `.feed_url` file. Never commit the URL. Save the body to `data/YYYYMMDD_HHMM.json`.
-2. Run `python3 to_neon_sql.py` on the newest snapshot (or pass file names, or `--all`). The script writes `sql/upsert.sql` and `sql/fetchlog.sql`.
-3. Execute both statements in one transaction on the Neon Postgres database, using Neon MCP `run_sql_transaction` or `psql` with `DATABASE_URL`. The record upsert and the fetch-log insert are idempotent.
-4. Compare the new rows with recent days and write a short briefing for the parent. Use three fragment lines labeled Feeding, Sleep, and Diaper, then one to three sentences. Include one age-appropriate caution, rotate the topic, and record the topic name in a local `topics.log`. Add an explicit flag only when milk intake or sleep is clearly insufficient, or when there are signs of fever or illness. Keep the briefing under `briefings/` (local only).
-5. Check a local `schedule.md` for vaccines or checkups within the next 7 days.
-6. Send a one-line note to the coordinating assistant.
-7. If the feed fetch fails (feeds expire after about 90 days), ask the user to recreate the feed.
+1. Run `python3 fetch.py`. The URL stays in `PIYOLOG_FEED_URL` or `.feed_url`. Never print it or commit it.
+2. Run `python3 summarize.py --days 2 --format both`.
+3. Write a short briefing for the parent from that output only:
+   - one line for Feeding
+   - one line for Sleep
+   - one line for Diaper
+   - then one to three sentences
+4. You may add one age-appropriate caution and rotate the topic. If you keep a list of topics already used, put it in a local `topics.log`. That file is gitignored.
+5. Add an explicit flag only when logged milk or sleep looks clearly low for what the parent already knows about their child, or when the summary shows temperature, vomiting, rash, cough, injury, medicine, or a hospital visit. Do not invent a medical threshold.
+6. This is not medical advice. The parent and their clinician decide. Say that in the briefing.
+7. A parent may keep vaccines or checkups in a local `schedule.md`. If that file exists, mention items in the next 7 days. Do not commit it.
+8. If `fetch.py` says the feed is unavailable, stop and ask the parent to create a new feed in the PiyoLog app. Do not guess a URL.
 
-`topics.log`, `schedule.md`, and `briefings/` are gitignored. Do not commit them.
+Postgres is optional. The briefing should be written from the local summary even when a database is also updated.
+
+Keep briefing text under `briefings/` if you save it. That directory is gitignored.

@@ -1,19 +1,35 @@
-# JSON snapshots and generated upsert SQL
+# Local snapshots, the deduplicated store, and generated SQL
 data/
 sql/*.sql
-*.json
 
-# Secrets
+# JSON snapshots anywhere, except the synthetic test fixture
+*.json
+!tests/fixtures/*.json
+
+# Store files if a custom directory is used
+records.jsonl
+records.csv
+records.sqlite
+records.sqlite3
+*.sqlite
+*.sqlite3
+.store.lock
+
+# Secrets and local config
 .feed_url
 .env
+.env.*
+!.env.example
 
-# Daily summary content (local only)
+# Local notes an agent might write for the parent
 topics.log
 schedule.md
 briefings/
 summaries/
 daily/
 
-# Python cache
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+.venv/
+venv/
