@@ -1,0 +1,19 @@
+# JSON snapshots and generated upsert SQL
+data/
+sql/*.sql
+*.json
+
+# Secrets
+.feed_url
+.env
+
+# Daily summary content (local only)
+topics.log
+schedule.md
+briefings/
+summaries/
+daily/
+
+# Python cache
+__pycache__/
+*.pyc
