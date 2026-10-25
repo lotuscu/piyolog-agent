@@ -1,6 +1,6 @@
 # Optional Postgres
 
-`fetch.py` stores everything in local files. Only enable this integration when the user explicitly requests database-backed long-term storage. Local files already retain history and do not require a database. Other database backends are not implemented. You do not need a database, and `summarize.py` never reads one.
+`fetch.py` stores everything in local files. You do not need a database, and `summarize.py` never reads one.
 
 To also keep a copy in your own Postgres (for example Neon), put that project's connection string in `DATABASE_URL`. Do not commit the string, a project id, or a branch id.
 
@@ -8,34 +8,31 @@ To also keep a copy in your own Postgres (for example Neon), put that project's 
 python3 fetch.py --backend postgres
 ```
 
-That still writes the local snapshot, JSONL and CSV files first. It then writes `sql/upsert.sql` and `sql/fetchlog.sql` and applies `schema.sql` plus those files (all idempotent, safe to re-run):
+That still writes the local snapshot, JSONL, CSV, and SQLite files first. It then writes `sql/upsert.sql` and `sql/fetchlog.sql` and applies `schema.sql` plus those files (all idempotent, safe to re-run):
 
 - Records use `ON CONFLICT (event_id) DO UPDATE`. `last_seen_at` moves forward; `first_seen_at` stays.
 - The fetch log uses `ON CONFLICT (source_file) DO NOTHING`.
-- Records must have the official `event_id`. Missing IDs cause an explicit error instead of guessed identities or silently merged events.
+- When the feed omits `event_id`, the key is `md5(type|datetime)`.
 
-The legacy psycopg2 branch is no longer supported. A driver must already be present: the tool tries `psycopg` (version 3), then the `psql` client. If none is available, the local files are still saved and the command exits with an error.
+A driver must already be present for `--backend postgres`: the tool tries `psycopg`, then `psycopg2`, then the `psql` client. If none is available, the local files are still saved and the command exits with an error. Pure-Python `pg8000` is **not** supported by that path.
 
-**On Muse** none of those is preinstalled. This works (verified October 2026, psycopg 3.3.6):
-
-```bash
-cd ~/workspace/piyolog-agent
-python3 -m venv .venv
-.venv/bin/pip install 'psycopg[binary]'
-DATABASE_URL='...' .venv/bin/python fetch.py --backend postgres
-```
-
-Use the venv inside the repository (`.venv/` is gitignored): installs in system or temporary locations do not survive a machine reset. Pure-Python `pg8000` is **not** supported by this tool.
-
-`to_postgres_sql.py` replaces the former `to_neon_sql.py` command; update any existing jobs that call the old name. It works with Postgres generally, not only Neon.
-
-`python3 to_postgres_sql.py` only builds the SQL files from snapshots; it does not connect. Apply them yourself with:
+**On Muse, do not use `--backend postgres` at all.** Muse's egress goes through an HTTP proxy with synthetic DNS, so a direct Postgres connection to port 5432 never reaches Neon — psycopg fails with "invalid response to SSL negotiation" no matter how correct the connection string is (verified October 2026). Use the HTTPS sync script instead; it talks to Neon's SQL-over-HTTPS endpoint on port 443, needs no driver, and reads `DATABASE_URL` from the environment or from a gitignored `.env` next to the script:
 
 ```bash
-python3 to_postgres_sql.py --data-dir data --sql-dir sql   # or --all for every snapshot
-PGDATABASE="$DATABASE_URL" psql -X -w -v ON_ERROR_STOP=1 --single-transaction -f schema.sql -f sql/upsert.sql -f sql/fetchlog.sql
+cd ~/workspace/piyolog-briefing
+python3 fetch.py                 # local store first, as always
+python3 neon_https_sync.py       # then push the newest snapshot to Neon
 ```
 
-The offline exporter is retained for historical backfills: `--all` reads every retained snapshot without contacting the feed or requiring database credentials. `fetch.py --backend postgres` only synchronizes the current response and cannot replace that operation.
+Two more things that bite on Muse and with least-privilege roles:
 
-The psql fallback passes the connection through the child process environment (`PGDATABASE`), not command-line arguments; SQL is sent through standard input. Environment variables are still secrets and must not be logged. Both backends apply schema and data in one transaction.
+- A role that can only read and write the tables (the recommended setup) has no CREATE privilege on schema `public`, so applying `schema.sql` fails with `permission denied for schema public` (SQLSTATE 42501). The tables must be created once by the database owner. `neon_https_sync.py` detects this, skips the schema step with a warning, and syncs the data.
+- Do not `source`/`.` the `.env` file in a shell: the connection string contains `&`, which splits the line and silently truncates the value. Keep the value quoted in `.env` and let the scripts parse the file themselves.
+
+`python3 to_neon_sql.py` only builds the SQL files from snapshots; it does not connect. Apply them yourself with:
+
+```bash
+python3 to_neon_sql.py --data-dir data --sql-dir sql   # or --all for every snapshot
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/upsert.sql
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/fetchlog.sql
+```
