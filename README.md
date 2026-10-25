@@ -1,8 +1,10 @@
-# PiyoLog briefing
+# PiyoLog agent
 
 English | [日本語](#日本語)
 
 Unofficial local tools that let a parent point an AI agent at their own [PiyoLog](https://www.piyolog.com/app/piyolog/data_feed/en/index.html) data feed and get a repeatable daily summary of feeding, sleep, and diapers.
+
+**Default: local files only.** No database account, database server, or database setup is needed. Keep snapshots and history in the user’s persistent local directory. Local files can also retain long-term history; arrange backups as needed. Only enable a database if the user explicitly requests database-backed long-term storage.
 
 **Not affiliated with, endorsed by, or maintained by the makers of PiyoLog.** This repository only fetches the feed the parent creates and summarizes it on their own machine.
 
@@ -20,8 +22,8 @@ Python 3.9 or newer. Nothing to install.
 2. Save the URL locally, never in git:
 
 ```bash
-git clone https://github.com/lotuscu/piyolog-briefing.git
-cd piyolog-briefing
+git clone https://github.com/lotuscu/piyolog-agent.git
+cd piyolog-agent
 printf '%s\n' 'PASTE-YOUR-FEED-URL-HERE' > .feed_url
 ```
 
@@ -30,11 +32,10 @@ printf '%s\n' 'PASTE-YOUR-FEED-URL-HERE' > .feed_url
 3. Fetch and summarize:
 
 ```bash
-python3 fetch.py
-python3 summarize.py --days 1
+python3 fetch.py && python3 summarize.py --days 1
 ```
 
-`fetch.py` writes a timestamped snapshot plus a deduplicated store under `data/` (`records.jsonl` is canonical; CSV and SQLite views are generated from it). Run it about twice a day: a free feed only returns the last ~24 hours, so a longer gap loses records for good. The store keeps what you already fetched, keyed by `event_id`.
+`fetch.py` writes a timestamped snapshot plus a deduplicated store under `data/` (`records.jsonl` is canonical; a CSV view is generated from it; no SQLite database is created). Run it about twice a day: a free feed only returns the last ~24 hours, so a longer gap loses records for good. The store keeps what you already fetched, keyed by `event_id`.
 
 ## What the summary reports
 
@@ -44,6 +45,10 @@ Per local day (timezone `PIYOLOG_TZ`, default `Asia/Tokyo`; feed timestamps are 
 - Breastfeeding minutes (left + right). Minutes are never converted to ml.
 - Sleep total and longest stretch. `Sleep` and `WakeUp` are separate records; the tool pairs each `Sleep` with the next `WakeUp` and splits stretches at midnight.
 - Pee and poop counts and longest gaps; solid foods from the memo with the first date each food appears; max temperature; counts of vomiting, rash, cough, medicine, hospital, injury when logged.
+
+Existing SQLite files from older versions are left untouched but are no longer updated. JSONL remains the canonical store.
+
+Summaries report feed coverage (complete, partial, missing, or unknown) and freshness (stale means the latest feed generation is over 24 hours old; recent does not guarantee the latest scheduled fetch succeeded). Coverage is derived from retained snapshot ranges; without those snapshots it is unknown. Missing milk amounts are unknown, with known amounts and missing-entry counts reported separately. Partial days, gaps, and stale data must not be interpreted as complete daily totals.
 
 Markdown rounds minutes to whole numbers; JSON keeps exact values. A record deleted in the app disappears from later feeds but stays in the local store.
 
@@ -57,7 +62,9 @@ Markdown rounds minutes to whole numbers; JSON keeps exact values. A record dele
 
 ## Optional Postgres
 
-Local files are the default and the only thing `summarize.py` reads. If you also want a copy in your own Postgres (for example Neon), see [docs/postgres.md](docs/postgres.md). Never commit a connection string.
+Local files are the default and the only thing `summarize.py` reads. Do not provision or connect a database during ordinary setup. Only if the user explicitly wants database-backed long-term storage, an optional additional copy can be written to their own Postgres (for example Neon); see [docs/postgres.md](docs/postgres.md). Never commit a connection string.
+
+Other database backends are not currently implemented. Never choose or provision one automatically.
 
 ## Commands
 
@@ -77,6 +84,8 @@ python3 -m unittest discover -s tests -t . -v       # tests (synthetic fixture o
 
 ## 日本語
 
+**既定はローカルファイル保存のみです。** データベースの契約・サーバー・設定は不要です。履歴は永続的なローカルディレクトリに保存し、必要に応じてバックアップしてください。ローカルファイルでも長期保存できます。利用者がデータベースでの長期保存を明示的に希望した場合に限り、任意の Postgres 連携を設定します。
+
 ぴよログ（PiyoLog）のデータフィードを保護者本人の AI エージェントが読み取り、授乳・睡眠・おむつの日次サマリーを作るための、非公式のローカルツールです。
 
 **PiyoLog 公式とは関係ありません。** このリポジトリは、保護者が自分で作成したフィードを取得し、自分のマシン上で要約するだけです。
@@ -95,8 +104,8 @@ Python 3.9 以上が必要です。インストールするものはありませ
 2. URL は git に入れず、ローカルに保存します。
 
 ```bash
-git clone https://github.com/lotuscu/piyolog-briefing.git
-cd piyolog-briefing
+git clone https://github.com/lotuscu/piyolog-agent.git
+cd piyolog-agent
 printf '%s\n' 'ここにフィードURL' > .feed_url
 ```
 
@@ -105,8 +114,7 @@ printf '%s\n' 'ここにフィードURL' > .feed_url
 3. 取得と要約：
 
 ```bash
-python3 fetch.py
-python3 summarize.py --days 1
+python3 fetch.py && python3 summarize.py --days 1
 ```
 
 `fetch.py` はスナップショットと重複排除済みストアを `data/` に書きます。無料フィードは直近約24時間分しか返さないため、1日2回程度の実行が目安です。間隔が空くと、取りこぼした記録は二度と戻りません。

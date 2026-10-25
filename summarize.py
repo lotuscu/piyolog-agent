@@ -64,7 +64,7 @@ def run(argv: list[str] | None = None) -> int:
     else:
         start, end = piyolog.window_from_days(args.days or 1, tz, datetime.now(timezone.utc))
     records = piyolog.load_records(Path(args.data_dir), source=args.source)
-    summary = piyolog.summarize(records, tz, start, end)
+    summary = piyolog.summarize(records, tz, start, end, coverage=piyolog.load_coverage(Path(args.data_dir)))
     markdown = piyolog.render_markdown(summary)
     rendered_json = piyolog.render_json(summary)
     if args.output:

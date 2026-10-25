@@ -5,9 +5,9 @@ description: Fetch a parent's PiyoLog data feed and summarize feeding, sleep, di
 
 # PiyoLog local summary
 
-The code lives in the `piyolog-briefing` repository. On Muse it is installed at `~/workspace/piyolog-briefing/`; if that directory is missing, follow the Muse setup in the repository's `AGENTS.md` first (clone or connector download, then copy this skill to `~/workspace/custom-skills/piyolog/SKILL.md`).
+The code lives in the `lotuscu/piyolog-agent` repository. On Muse it is installed at `~/workspace/piyolog-briefing/`; if that directory is missing, follow the Muse setup in the repository's `AGENTS.md` first (clone or connector download, then copy this skill to `~/workspace/custom-skills/piyolog/SKILL.md`).
 
-Read `AGENTS.md` in the repository root and follow it. Python 3.9+ standard library only. The default store is local files under the repository's `data/`; paths are anchored to the repository, so the scripts work from any working directory. Postgres is optional.
+Read `AGENTS.md` in the repository root and follow it. Python 3.9+ standard library only. The default store is local files under the repository's `data/`; paths are anchored to the repository, so the scripts work from any working directory. Do not set up a database unless the parent explicitly requests database-backed long-term storage. Postgres is the only optional database backend currently implemented; local files can retain history indefinitely too.
 
 ## Safety
 
@@ -19,6 +19,8 @@ The feed URL is a password. Never print it, log it, commit it, or pass it on the
 python3 ~/workspace/piyolog-briefing/fetch.py
 python3 ~/workspace/piyolog-briefing/summarize.py --days 2 --format both
 ```
+
+Only run the summary if fetch exits successfully (`fetch.py && summarize.py`). On any fetch failure, report the failure instead of presenting stale data as current. Preserve coverage, freshness and missing-amount warnings; unknown is not zero.
 
 Run the fetch about twice a day (for example 06:00 and 17:00 in the parent's timezone). A free feed covers about 24 hours and expires 90 days after creation. Do not poll faster than about once a minute.
 

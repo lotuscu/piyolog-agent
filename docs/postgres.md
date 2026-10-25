@@ -1,6 +1,6 @@
 # Optional Postgres
 
-`fetch.py` stores everything in local files. You do not need a database, and `summarize.py` never reads one.
+`fetch.py` stores everything in local files. Only enable this integration when the user explicitly requests database-backed long-term storage. Local files already retain history and do not require a database. Other database backends are not implemented. You do not need a database, and `summarize.py` never reads one.
 
 To also keep a copy in your own Postgres (for example Neon), put that project's connection string in `DATABASE_URL`. Do not commit the string, a project id, or a branch id.
 
@@ -8,7 +8,7 @@ To also keep a copy in your own Postgres (for example Neon), put that project's 
 python3 fetch.py --backend postgres
 ```
 
-That still writes the local snapshot, JSONL, CSV, and SQLite files first. It then writes `sql/upsert.sql` and `sql/fetchlog.sql` and applies `schema.sql` plus those files (all idempotent, safe to re-run):
+That still writes the local snapshot, JSONL and CSV files first. It then writes `sql/upsert.sql` and `sql/fetchlog.sql` and applies `schema.sql` plus those files (all idempotent, safe to re-run):
 
 - Records use `ON CONFLICT (event_id) DO UPDATE`. `last_seen_at` moves forward; `first_seen_at` stays.
 - The fetch log uses `ON CONFLICT (source_file) DO NOTHING`.

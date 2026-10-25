@@ -78,14 +78,7 @@ class StoreTests(unittest.TestCase):
             csv_text = (root / "records.csv").read_text(encoding="utf-8")
             self.assertEqual(csv_text.count("\n"), len(rows) + 1)
             self.assertIn("updated note", csv_text)
-            import sqlite3
-
-            connection = sqlite3.connect(root / "records.sqlite")
-            try:
-                count = connection.execute("select count(*) from records").fetchone()[0]
-            finally:
-                connection.close()
-            self.assertEqual(count, len(rows))
+            self.assertFalse((root / "records.sqlite").exists())
 
     def _temp(self):
         import tempfile

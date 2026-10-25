@@ -2,7 +2,7 @@
 
 Read this file before doing anything with a parent's PiyoLog records.
 
-Unofficial local tool, not affiliated with PiyoLog. It lets a parent point any assistant at their own data feed and get a repeatable summary. Python 3.9+ standard library only. No database is required.
+Unofficial local tool, not affiliated with PiyoLog. It lets a parent point any assistant at their own data feed and get a repeatable summary. Python 3.9+ standard library only. Default to persistent local JSONL, CSV and snapshot files. No database is required or created. Local files can retain long-term history too. Only configure the optional Postgres copy when the parent explicitly asks for database-backed long-term storage.
 
 ## Safety
 
@@ -18,8 +18,8 @@ Unofficial local tool, not affiliated with PiyoLog. It lets a parent point any a
 Do these steps in order. The parent talks to you only through chat; they cannot run shell commands or edit files on your machine themselves, so do the file work yourself.
 
 1. **Get the code** into `~/workspace/piyolog-briefing/` (persistent; never `/tmp`).
-   - First try: `git clone https://github.com/lotuscu/piyolog-briefing.git ~/workspace/piyolog-briefing`
-   - If git fails for lack of credentials (common when the repository is private for this user, or git has no login on your machine): use your GitHub connector instead. With `get_file_contents` on `lotuscu/piyolog-briefing`, list the root at the target ref, recurse into `docs/`, `skills/piyolog/`, `tests/`, and `tests/fixtures/`, and download every file to the same relative path. Verify each file's size matches the listing before continuing. Do not conclude the repository is unreachable from a failed `git clone` alone.
+   - First try: `git clone https://github.com/lotuscu/piyolog-agent.git ~/workspace/piyolog-briefing`
+   - If git fails for lack of credentials (common when the repository is private for this user, or git has no login on your machine): use your GitHub connector instead. With `get_file_contents` on `lotuscu/piyolog-agent`, list the root at the target ref, recurse into `docs/`, `skills/piyolog/`, `tests/`, and `tests/fixtures/`, and download every file to the same relative path. Verify each file's size matches the listing before continuing. Do not conclude the repository is unreachable from a failed `git clone` alone.
 2. **Install the skill**: copy `skills/piyolog/SKILL.md` to `~/workspace/custom-skills/piyolog/SKILL.md`. That directory is where Muse loads custom skills from; leaving the file inside the repository is not an installation.
 3. **Receive the secret**: ask the parent to create a feed in the PiyoLog app (Settings → Data Feed → Create New Feed) and send you the URL in chat — in Muse that is the only channel they have. Then:
    - Write it, exactly one line, to `~/workspace/piyolog-briefing/.feed_url` with a file write that does not echo it anywhere, and set permissions `chmod 600 .feed_url`.
@@ -30,7 +30,7 @@ Do these steps in order. The parent talks to you only through chat; they cannot 
    - `python3 fetch.py` — expect `fetched=N inserted=N` with no URL in the output. Run it a second time: expect `inserted=0 updated=N` (deduplication works).
    - `python3 summarize.py --days 2 --format both` — show the parent the resulting briefing (see `docs/routine.md`).
    - Paths are anchored to the repository directory, so the scripts work from any working directory. Still use absolute paths in scheduled jobs.
-5. **Schedule it**: create two scheduled jobs (Muse crons) at about 06:00 and 17:00 in the parent's timezone. Each job's instructions must say: run `python3 ~/workspace/piyolog-briefing/fetch.py`, then `python3 ~/workspace/piyolog-briefing/summarize.py --days 2 --format both`, then send the parent a briefing shaped like `docs/routine.md`. If fetch reports HTTP 401/404, tell the parent to create a new feed instead of sending a briefing. A free feed covers only ~24 hours, so the twice-daily overlap is what keeps the local history complete.
+5. **Schedule it**: create two scheduled jobs (Muse crons) at about 06:00 and 17:00 in the parent's timezone. Each job's instructions must say: run `python3 ~/workspace/piyolog-briefing/fetch.py`, then `python3 ~/workspace/piyolog-briefing/summarize.py --days 2 --format both`, then send the parent a briefing shaped like `docs/routine.md`. If fetch returns any nonzero exit status, stop the normal briefing and report the failure; do not present old local data as current. For HTTP 401/404, follow the feed-unavailable guidance below. Use `fetch.py && summarize.py` semantics, never run the summary unconditionally after a failure. A free feed covers only ~24 hours, so the twice-daily overlap is what keeps the local history complete.
 6. **Postgres only if the parent asks** (for example Neon). See `docs/postgres.md`. On Muse your machine has no `psql` and no `psycopg` preinstalled; the doc gives the exact venv install that works. Never invent a connection string, and never write one into the repo.
 
 ## Setup on other agents
@@ -57,6 +57,8 @@ What the numbers mean (full rules in `README.md`):
 - A record deleted in the app disappears from later feeds but stays in the local store. Say so if the parent asks why something old is still present.
 
 ## Briefing
+
+Preserve coverage, freshness and missing-amount warnings in the parent-facing briefing. Unknown values are not zero, and partial days must not be compared with complete days as if equivalent.
 
 Follow `docs/routine.md`: Feeding / Sleep / Diaper lines, then one to three sentences, from `summarize.py` output only. Save briefings under `briefings/` if at all; never commit them.
 

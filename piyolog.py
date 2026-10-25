@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 import shutil
-import sqlite3
 import subprocess
 import tempfile
 import urllib.error
@@ -340,10 +339,6 @@ class Store:
     def csv_path(self) -> Path:
         return self.root / "records.csv"
 
-    @property
-    def sqlite_path(self) -> Path:
-        return self.root / "records.sqlite"
-
     def read_jsonl(self) -> list[dict]:
         if not self.jsonl_path.is_file():
             return []
@@ -354,12 +349,15 @@ class Store:
                 rows.append(json.loads(stripped))
         return rows
 
-    def upsert_records(self, incoming: list[dict], seen_at: str) -> tuple[int, int, int]:
+    def upsert_records(self, incoming: list[dict], seen_at: str, exclude_snapshot: str | None = None) -> tuple[int, int, int]:
         self.root.mkdir(parents=True, exist_ok=True)
         lock = open(self.root / ".store.lock", "a", encoding="utf-8")
         try:
             _lock_file(lock)
-            existing = {row["event_id"]: row for row in self.read_jsonl()}
+            rows = self.read_jsonl()
+            if not rows:
+                rows = load_snapshots(self.root, exclude_snapshot=exclude_snapshot)
+            existing = {row["event_id"]: row for row in rows}
             inserted = 0
             updated = 0
             skipped = 0
@@ -384,7 +382,6 @@ class Store:
             )
             _atomic_write(self.jsonl_path, _render_jsonl(ordered))
             _atomic_write(self.csv_path, _render_csv(ordered))
-            _write_sqlite(self.sqlite_path, ordered)
             return inserted, updated, skipped
         finally:
             _unlock_file(lock)
@@ -453,102 +450,6 @@ def _render_csv(rows: list[dict]) -> str:
     return buffer.getvalue()
 
 
-def _write_sqlite(path: Path, rows: list[dict]) -> None:
-    connection = sqlite3.connect(path)
-    try:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS records (
-                event_id TEXT PRIMARY KEY,
-                recorded_at TEXT NOT NULL,
-                type TEXT NOT NULL,
-                amount_ml REAL,
-                left_sec REAL,
-                right_sec REAL,
-                memo TEXT,
-                details TEXT,
-                raw TEXT NOT NULL,
-                first_seen_at TEXT NOT NULL,
-                last_seen_at TEXT NOT NULL,
-                source_file TEXT
-            )
-            """
-        )
-        connection.execute(
-            """
-            CREATE INDEX IF NOT EXISTS records_type_recorded_at_idx
-            ON records (type, recorded_at)
-            """
-        )
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS fetch_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                fetched_at TEXT NOT NULL,
-                source_file TEXT NOT NULL UNIQUE,
-                generated_at TEXT,
-                record_count INTEGER
-            )
-            """
-        )
-        connection.execute("DELETE FROM records")
-        connection.executemany(
-            """
-            INSERT INTO records (
-                event_id, recorded_at, type, amount_ml, left_sec, right_sec,
-                memo, details, raw, first_seen_at, last_seen_at, source_file
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            [
-                (
-                    row["event_id"],
-                    row["recorded_at"],
-                    row["type"],
-                    row.get("amount_ml"),
-                    row.get("left_sec"),
-                    row.get("right_sec"),
-                    row.get("memo"),
-                    row.get("details"),
-                    json.dumps(row.get("raw"), ensure_ascii=False),
-                    row.get("first_seen_at") or "",
-                    row.get("last_seen_at") or "",
-                    row.get("source_file"),
-                )
-                for row in rows
-            ],
-        )
-        connection.commit()
-    finally:
-        connection.close()
-
-
-def log_fetch(path: Path, source_file: str, generated_at, record_count: int, fetched_at: str) -> None:
-    connection = sqlite3.connect(path)
-    try:
-        connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS fetch_log (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                fetched_at TEXT NOT NULL,
-                source_file TEXT NOT NULL UNIQUE,
-                generated_at TEXT,
-                record_count INTEGER
-            )
-            """
-        )
-        connection.execute(
-            """
-            INSERT INTO fetch_log (fetched_at, source_file, generated_at, record_count)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT (source_file) DO NOTHING
-            """,
-            (fetched_at, source_file, generated_at, record_count),
-        )
-        connection.commit()
-    finally:
-        connection.close()
-
-
 def records_from_payload(payload: dict, source_file: str, seen_at: str) -> tuple[list[dict], int]:
     incoming = []
     skipped = 0
@@ -561,10 +462,12 @@ def records_from_payload(payload: dict, source_file: str, seen_at: str) -> tuple
     return incoming, skipped
 
 
-def load_snapshots(data_dir: Path) -> list[dict]:
+def load_snapshots(data_dir: Path, exclude_snapshot: str | None = None) -> list[dict]:
     merged: dict[str, dict] = {}
     seen_at = utc_now_iso()
     for path in sorted(data_dir.glob("*.json")):
+        if path.name == exclude_snapshot:
+            continue
         try:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
@@ -611,14 +514,7 @@ def fetch_and_store(
     )
     seen_at = utc_now_iso(moment)
     incoming, skipped = records_from_payload(payload, snapshot.name, seen_at)
-    inserted, updated, upsert_skipped = Store(data_dir).upsert_records(incoming, seen_at)
-    log_fetch(
-        Store(data_dir).sqlite_path,
-        snapshot.name,
-        payload.get("generated_at"),
-        len(payload.get("records") or []),
-        seen_at,
-    )
+    inserted, updated, upsert_skipped = Store(data_dir).upsert_records(incoming, seen_at, exclude_snapshot=snapshot.name)
     result = {
         "snapshot": snapshot.name,
         "fetched": len(payload.get("records") or []),
@@ -703,8 +599,8 @@ def _day_bounds(day: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
 
 def _overlap_minutes(start: datetime, end: datetime, day: date, tz: ZoneInfo) -> float:
     day_start, day_end = _day_bounds(day, tz)
-    left = max(start, day_start)
-    right = min(end, day_end)
+    left = max(start.astimezone(timezone.utc), day_start.astimezone(timezone.utc))
+    right = min(end.astimezone(timezone.utc), day_end.astimezone(timezone.utc))
     if right <= left:
         return 0.0
     return (right - left).total_seconds() / 60.0
@@ -720,7 +616,58 @@ def _local_date(record: dict, tz: ZoneInfo) -> date:
     return parse_dt(record["recorded_at"]).astimezone(tz).date()
 
 
-def summarize(records: list[dict], tz: ZoneInfo, start: date, end: date) -> dict:
+def load_coverage(data_dir: Path, now: datetime | None = None) -> dict:
+    """Use feed ranges, not event timestamps, to measure observed history."""
+    intervals = []
+    latest = None
+    for path in data_dir.glob("*.json"):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            generated = parse_dt(payload["generated_at"])
+            bounds = payload["range"]
+            left, right = parse_dt(bounds["from"]), parse_dt(bounds["to"])
+            if left >= right or not isinstance(payload["records"], list):
+                continue
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            continue
+        intervals.append((left, right))
+        latest = max(latest, generated) if latest else generated
+    moment = now or datetime.now(timezone.utc)
+    return {
+        "intervals": intervals,
+        "latest_generated_at": utc_now_iso(latest) if latest else None,
+        "freshness": ("stale" if moment - latest > timedelta(hours=24) else "recent") if latest else "unknown",
+    }
+
+
+def day_coverage(day: date, tz: ZoneInfo, coverage: dict | None) -> str:
+    if not coverage or not coverage.get("intervals"):
+        return "unknown"
+    left, right = (value.astimezone(timezone.utc) for value in _day_bounds(day, tz))
+    cursor = left
+    any_overlap = False
+    for start, end in sorted(coverage["intervals"]):
+        if end <= left or start >= right:
+            continue
+        any_overlap = True
+        if start > cursor:
+            return "partial"
+        cursor = max(cursor, end)
+        if cursor >= right:
+            return "complete"
+    return "partial" if any_overlap else "missing"
+
+
+def _milk_display(day: dict, kind: str) -> str:
+    missing = day["milk_missing_amount_count"][kind]
+    if missing:
+        return f"unknown total (known {day['milk_known_ml'][kind]} ml; {missing} record(s) without amount)"
+    value = day["milk_ml"][kind]
+    return f"{value} ml" if value is not None else "unknown"
+
+
+def summarize(records: list[dict], tz: ZoneInfo, start: date, end: date,
+              coverage: dict | None = None) -> dict:
     if end < start:
         raise FeedError("--from is after --to.", exit_code=2)
     stretches = sleep_stretches(records)
@@ -749,6 +696,7 @@ def summarize(records: list[dict], tz: ZoneInfo, start: date, end: date) -> dict
     while cursor <= end:
         in_day = [row for row in records if _local_date(row, tz) == cursor]
         milk = {kind: 0.0 for kind in MILK_TYPES}
+        missing_milk = {kind: 0 for kind in MILK_TYPES}
         breast_seconds = 0.0
         temperatures = []
         other = {
@@ -762,8 +710,11 @@ def summarize(records: list[dict], tz: ZoneInfo, start: date, end: date) -> dict
         solids: dict[str, dict] = {}
         for record in in_day:
             kind = record.get("type")
-            if kind in milk and record.get("amount_ml") is not None:
-                milk[kind] += float(record["amount_ml"])
+            if kind in milk:
+                if record.get("amount_ml") is None:
+                    missing_milk[kind] += 1
+                else:
+                    milk[kind] += float(record["amount_ml"])
             if kind == "BreastFeeding":
                 breast_seconds += _positive_seconds(record.get("left_sec"))
                 breast_seconds += _positive_seconds(record.get("right_sec"))
@@ -795,7 +746,11 @@ def summarize(records: list[dict], tz: ZoneInfo, start: date, end: date) -> dict
             {
                 "date": cursor.isoformat(),
                 "record_count": len(in_day),
-                "milk_ml": {kind: _as_number(amount) for kind, amount in milk.items()},
+                "milk_ml": {kind: (None if missing_milk[kind] or not in_day else _as_number(amount))
+                            for kind, amount in milk.items()},
+                "milk_known_ml": {kind: _as_number(amount) for kind, amount in milk.items()},
+                "milk_missing_amount_count": missing_milk,
+                "coverage": day_coverage(cursor, tz, coverage),
                 "breastfeeding_minutes": _as_number(breast_seconds / 60.0),
                 "sleep": {
                     "total_minutes": _as_number(total_sleep),
@@ -815,6 +770,7 @@ def summarize(records: list[dict], tz: ZoneInfo, start: date, end: date) -> dict
         )
         cursor += timedelta(days=1)
     return {
+        "data_status": {key: value for key, value in (coverage or {}).items() if key != "intervals"},
         "timezone": getattr(tz, "key", str(tz)),
         "from": start.isoformat(),
         "to": end.isoformat(),
@@ -860,20 +816,25 @@ def render_markdown(summary: dict) -> str:
         f"{summary['from']} to {summary['to']}. {summary['disclaimer']}",
         "",
     ]
+    status = summary.get("data_status", {})
+    lines.append(f"Latest feed generation: {status.get('latest_generated_at') or 'unknown'}. Freshness: {status.get('freshness', 'unknown')}.")
+    lines.append("")
     for day in summary["days"]:
-        milk = day["milk_ml"]
         diapers = day["diapers"]
         sleep = day["sleep"]
         lines.append(f"## {day['date']}")
         lines.append("")
+        lines.append(f"- Data coverage: {day['coverage']}. Partial, missing or unknown coverage must not be treated as a complete daily total.")
+        if not day["record_count"]:
+            lines.append("- No records available for this date; zero counts do not establish that no care occurred.")
         lines.append(
-            "- Feeding: formula {formula} ml, expressed breast milk {expressed} ml, "
-            "breastfeeding recorded {breast} ml, pumping {pumping} ml, "
+            "- Feeding: formula {formula}, expressed breast milk {expressed}, "
+            "breastfeeding recorded {breast}, pumping {pumping}, "
             "breastfeeding time {minutes} minutes.".format(
-                formula=milk["Formula"],
-                expressed=milk["ExpressedBreastMilk"],
-                breast=milk["BreastFeeding"],
-                pumping=milk["Pumping"],
+                formula=_milk_display(day, "Formula"),
+                expressed=_milk_display(day, "ExpressedBreastMilk"),
+                breast=_milk_display(day, "BreastFeeding"),
+                pumping=_milk_display(day, "Pumping"),
                 minutes=_fmt_minutes(day["breastfeeding_minutes"]),
             )
         )
@@ -998,7 +959,8 @@ def apply_postgres_payload(payload: dict, source_file: str, database_url: str, s
     upsert, fetch_log = build_sql(records, [log])
     write_sql_files(sql_dir, upsert, fetch_log)
     schema = SCHEMA_PATH.read_text(encoding="utf-8")
-    statements = split_sql(schema) + split_sql(upsert) + split_sql(fetch_log)
+    # Generated upserts are single statements; memo text may contain semicolons.
+    statements = split_sql(schema) + [upsert, fetch_log]
     apply_sql(database_url.strip(), statements)
 
 

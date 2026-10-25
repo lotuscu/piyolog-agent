@@ -5,8 +5,8 @@ Generic routine for any assistant. Not a personal schedule; contains no sample b
 Run at about 06:00 and 17:00 in the parent's timezone — any two times about half a day apart work. A free PiyoLog feed covers only the last ~24 hours, so skipping more than a day can leave a gap the feed will never send again.
 
 1. Run `python3 fetch.py` (paths are anchored to the repository; any working directory works). The URL stays in `PIYOLOG_FEED_URL` or `.feed_url`. Never print it or commit it.
-2. Run `python3 summarize.py --days 2 --format both`.
-3. Write a short briefing from that output only:
+2. Only if fetch exits with status 0, run `python3 summarize.py --days 2 --format both`. On any failure (network, rate limit, server error, storage error, or unavailable feed), stop the normal briefing and report the problem. Never present old local data as current.
+3. Write a short briefing from that output only. Include coverage and freshness warnings and missing milk amounts. Partial/current days are not complete daily totals; missing or unknown data is not zero:
    - one line for Feeding
    - one line for Sleep
    - one line for Diaper

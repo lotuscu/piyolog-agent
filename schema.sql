@@ -1,5 +1,5 @@
 -- Optional Postgres schema for a PiyoLog feed.
--- The default store is local files written by fetch.py (JSONL, CSV, and SQLite).
+-- The default store is local files written by fetch.py (JSONL, CSV, and snapshots).
 -- Apply this only if you opt in, for example on Neon or another Postgres:
 --   psql "$DATABASE_URL" -f schema.sql
 -- Safe to re-run. Records upsert on event_id and refresh last_seen_at.
