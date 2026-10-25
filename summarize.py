@@ -11,13 +11,15 @@ from pathlib import Path
 
 import piyolog
 
+BASE_DIR = Path(__file__).resolve().parent
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Summarize the local PiyoLog store by day.")
     parser.add_argument(
         "--data-dir",
-        default=os.environ.get("PIYOLOG_DATA_DIR") or "data",
-        help="Store directory (default: data, or PIYOLOG_DATA_DIR).",
+        default=os.environ.get("PIYOLOG_DATA_DIR") or str(BASE_DIR / "data"),
+        help="Store directory (default: <repo>/data, or PIYOLOG_DATA_DIR).",
     )
     parser.add_argument(
         "--source",

@@ -20,6 +20,8 @@ from pathlib import Path
 
 import piyolog
 
+BASE_DIR = Path(__file__).resolve().parent
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -39,13 +41,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--data-dir",
-        default=os.environ.get("PIYOLOG_DATA_DIR") or "data",
-        help="Directory of snapshot JSON files (default: data, or PIYOLOG_DATA_DIR).",
+        default=os.environ.get("PIYOLOG_DATA_DIR") or str(BASE_DIR / "data"),
+        help="Directory of snapshot JSON files (default: <repo>/data, or PIYOLOG_DATA_DIR).",
     )
     parser.add_argument(
         "--sql-dir",
-        default=os.environ.get("PIYOLOG_SQL_DIR") or "sql",
-        help="Where to write upsert.sql and fetchlog.sql (default: sql, or PIYOLOG_SQL_DIR).",
+        default=os.environ.get("PIYOLOG_SQL_DIR") or str(BASE_DIR / "sql"),
+        help="Where to write upsert.sql and fetchlog.sql (default: <repo>/sql, or PIYOLOG_SQL_DIR).",
     )
     parser.add_argument(
         "--all",

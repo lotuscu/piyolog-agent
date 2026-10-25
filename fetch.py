@@ -15,6 +15,8 @@ from pathlib import Path
 
 import piyolog
 
+BASE_DIR = Path(__file__).resolve().parent
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -22,8 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--data-dir",
-        default=os.environ.get("PIYOLOG_DATA_DIR") or "data",
-        help="Directory for snapshots and the local store (default: data, or PIYOLOG_DATA_DIR).",
+        default=os.environ.get("PIYOLOG_DATA_DIR") or str(BASE_DIR / "data"),
+        help="Directory for snapshots and the local store (default: <repo>/data, or PIYOLOG_DATA_DIR).",
     )
     parser.add_argument(
         "--feed-url-file",
@@ -41,8 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--sql-dir",
-        default=os.environ.get("PIYOLOG_SQL_DIR") or "sql",
-        help="Where to write generated SQL when --backend postgres is set (default: sql).",
+        default=os.environ.get("PIYOLOG_SQL_DIR") or str(BASE_DIR / "sql"),
+        help="Where to write generated SQL when --backend postgres is set (default: <repo>/sql).",
     )
     return parser
 
@@ -52,7 +54,7 @@ def run(argv: list[str] | None = None) -> int:
     piyolog.reject_url_on_argv(args_list)
     args = build_parser().parse_args(args_list)
     tz = piyolog.resolve_tz(args.tz)
-    url = piyolog.load_feed_url(feed_url_file=args.feed_url_file)
+    url = piyolog.load_feed_url(feed_url_file=args.feed_url_file, cwd=BASE_DIR)
     result = piyolog.fetch_and_store(
         url,
         Path(args.data_dir),

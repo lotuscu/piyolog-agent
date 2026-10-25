@@ -312,5 +312,32 @@ class RedactTests(unittest.TestCase):
         self.assertIn("[redacted]", cleaned)
 
 
+class CliDefaultsTests(unittest.TestCase):
+    def test_cli_defaults_are_anchored_to_the_repo_directory(self):
+        # An agent may run these scripts from any working directory (for
+        # example a scheduled job). Defaults must not depend on the cwd.
+        import fetch
+        import summarize
+        import to_neon_sql
+
+        for module in (fetch, summarize, to_neon_sql):
+            args = module.build_parser().parse_args([])
+            data_dir = Path(args.data_dir)
+            self.assertTrue(data_dir.is_absolute(), module.__name__)
+            self.assertEqual(data_dir, Path(module.__file__).resolve().parent / "data")
+
+    def test_markdown_rounds_fractional_minutes(self):
+        summary = piyolog.summarize(
+            normalized_fixture(), TZ, date(2026, 9, 8), date(2026, 9, 8)
+        )
+        summary["days"][0]["breastfeeding_minutes"] = 49.71
+        markdown = piyolog.render_markdown(summary)
+        self.assertIn("breastfeeding time 50 minutes", markdown)
+        self.assertNotIn("49.71", markdown)
+        # JSON keeps the exact value.
+        rendered = json.loads(piyolog.render_json(summary))
+        self.assertEqual(rendered["days"][0]["breastfeeding_minutes"], 49.71)
+
+
 if __name__ == "__main__":
     unittest.main()
