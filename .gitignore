@@ -33,3 +33,6 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+
+# Private originals retained during store repair
+records.corrupt.*.bak

@@ -12,9 +12,9 @@ That still writes the local snapshot, JSONL and CSV files first. It then writes 
 
 - Records use `ON CONFLICT (event_id) DO UPDATE`. `last_seen_at` moves forward; `first_seen_at` stays.
 - The fetch log uses `ON CONFLICT (source_file) DO NOTHING`.
-- When the feed omits `event_id`, the key is `md5(type|datetime)`.
+- Records must have the official `event_id`. Missing IDs cause an explicit error instead of guessed identities or silently merged events.
 
-A driver must already be present: the tool tries `psycopg`, then `psycopg2`, then the `psql` client. If none is available, the local files are still saved and the command exits with an error.
+The legacy psycopg2 branch is no longer supported. A driver must already be present: the tool tries `psycopg` (version 3), then the `psql` client. If none is available, the local files are still saved and the command exits with an error.
 
 **On Muse** none of those is preinstalled. This works (verified October 2026, psycopg 3.3.6):
 
@@ -33,6 +33,9 @@ Use the venv inside the repository (`.venv/` is gitignored): installs in system 
 
 ```bash
 python3 to_postgres_sql.py --data-dir data --sql-dir sql   # or --all for every snapshot
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/upsert.sql
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/fetchlog.sql
+PGDATABASE="$DATABASE_URL" psql -X -w -v ON_ERROR_STOP=1 --single-transaction -f schema.sql -f sql/upsert.sql -f sql/fetchlog.sql
 ```
+
+The offline exporter is retained for historical backfills: `--all` reads every retained snapshot without contacting the feed or requiring database credentials. `fetch.py --backend postgres` only synchronizes the current response and cannot replace that operation.
+
+The psql fallback passes the connection through the child process environment (`PGDATABASE`), not command-line arguments; SQL is sent through standard input. Environment variables are still secrets and must not be logged. Both backends apply schema and data in one transaction.

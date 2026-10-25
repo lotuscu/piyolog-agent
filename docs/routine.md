@@ -6,7 +6,7 @@ Run at about 06:00 and 17:00 in the parent's timezone — any two times about ha
 
 1. Run `python3 fetch.py` (paths are anchored to the repository; any working directory works). The URL stays in `PIYOLOG_FEED_URL` or `.feed_url`. Never print it or commit it.
 2. Only if fetch exits with status 0, run `python3 summarize.py --days 2 --format both`. On any failure (network, rate limit, server error, storage error, or unavailable feed), stop the normal briefing and report the problem. Never present old local data as current.
-3. Write a short briefing from that output only. Include coverage and freshness warnings and missing milk amounts. Partial/current days are not complete daily totals; missing or unknown data is not zero:
+3. Write a short briefing from that output only. Include coverage, freshness, excluded sleep pairs, store-recovery warnings and missing bottle amounts. Breastfeeding/pumping volume is optional. Partial/current days are not complete daily totals; missing or unknown data is not zero:
    - one line for Feeding
    - one line for Sleep
    - one line for Diaper

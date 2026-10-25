@@ -55,14 +55,16 @@ python3 summarize.py --days 7 --tz America/Los_Angeles
 What the numbers mean (full rules in `README.md`):
 
 - Pumping is reported separately; do not add it to what the baby drank unless a feed was also logged. Never convert breastfeeding minutes into millilitres.
-- Sleep is paired `Sleep` → next `WakeUp` records. A `Sleep` with no later `WakeUp` is not counted. Stretches crossing midnight are split across both dates for the total; the longest stretch is the full pair.
+- Sleep is paired `Sleep` → next `WakeUp` records. A `Sleep` with no later `WakeUp` is not counted. Pairs over 24 hours (configurable with `--max-sleep-hours`) are excluded and flagged for review, not treated as measured sleep. This is a data-quality limit, not a medical cutoff. Stretches crossing midnight are split across both dates for the total; the longest stretch is the full pair.
 - A record deleted in the app disappears from later feeds but stays in the local store. Say so if the parent asks why something old is still present.
 
 ## Briefing
 
-Preserve coverage, freshness and missing-amount warnings in the parent-facing briefing. Unknown values are not zero, and partial days must not be compared with complete days as if equivalent.
+Preserve sleep-pair exclusion, store-recovery, coverage, freshness and missing-bottle-amount warnings in the parent-facing briefing. Unknown values are not zero, and partial days must not be compared with complete days as if equivalent.
 
 Follow `docs/routine.md`: Feeding / Sleep / Diaper lines, then one to three sentences, from `summarize.py` output only. Save briefings under `briefings/` if at all; never commit them.
+
+Missing `event_id` is a source-data error: keep the snapshot, report the failure, and never invent IDs. For corrupt local stores, preserve the private `records.corrupt.*.bak` and explain that automatic recovery may be incomplete. Optional breastfeeding/pumping volume is not a missing bottle-intake warning.
 
 ## When the fetch fails
 

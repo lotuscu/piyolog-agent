@@ -7,21 +7,38 @@ The feed URL is a secret. Functions in this module never include it in errors.
 from __future__ import annotations
 
 import csv
-import hashlib
 import json
+import math
 import os
+import re
+import warnings
 import shutil
 import subprocess
 import tempfile
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from io import StringIO
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+try:
+    import psycopg
+except ImportError:
+    psycopg = None
 
 USER_AGENT = "piyolog-agent/0.1 (personal local summary)"
 DEFAULT_TZ = "Asia/Tokyo"
+MAX_RESPONSE_BYTES = 20 * 1024 * 1024
+DEFAULT_MAX_SLEEP_HOURS = 24
 MILK_TYPES = ("Formula", "ExpressedBreastMilk", "BreastFeeding", "Pumping")
+OPTIONAL_MILK_TYPES = ("BreastFeeding", "Pumping")
 DIAPER_TYPES = ("Pee", "Poop")
 SCHEMA_PATH = Path(__file__).resolve().parent / "schema.sql"
 DISCLAIMER = (
@@ -52,14 +69,6 @@ class FeedError(Exception):
         self.exit_code = exit_code
 
 
-def redact(text: str, secrets: list[str]) -> str:
-    cleaned = text
-    for secret in secrets:
-        if secret:
-            cleaned = cleaned.replace(secret, "[redacted]")
-    return cleaned
-
-
 def resolve_tz(name: str | None) -> ZoneInfo:
     label = (name or os.environ.get("PIYOLOG_TZ") or DEFAULT_TZ).strip() or DEFAULT_TZ
     try:
@@ -87,9 +96,11 @@ def event_id_for(record: dict) -> str:
     event_id = record.get("event_id")
     if isinstance(event_id, str) and event_id.strip():
         return event_id
-    return hashlib.md5(
-        f"{record.get('type')}|{record.get('datetime')}".encode()
-    ).hexdigest()
+    raise FeedError(
+        "A record has no event_id. Its identity cannot be inferred safely. "
+        "No records from this feed were merged; keep the raw snapshot and retry a valid feed.",
+        exit_code=5,
+    )
 
 
 def amount_ml(record: dict):
@@ -226,12 +237,11 @@ def http_get(url: str, urlopen=None, timeout: int = 30) -> tuple[int, bytes]:
     try:
         response = opener(request, timeout=timeout)
     except urllib.error.HTTPError as exc:
-        body = b""
-        if exc.fp is not None:
-            try:
-                body = exc.read()
-            except Exception:
-                body = b""
+        try:
+            # Error bodies need only enough bytes to identify an error code.
+            body = exc.read(64 * 1024) if exc.fp is not None else b""
+        finally:
+            exc.close()
         return exc.code, body
     except urllib.error.URLError as exc:
         raise FeedError(
@@ -240,12 +250,10 @@ def http_get(url: str, urlopen=None, timeout: int = 30) -> tuple[int, bytes]:
         ) from exc
     try:
         status = getattr(response, "status", None) or getattr(response, "code", 200)
-        body = response.read()
+        body = response.read(MAX_RESPONSE_BYTES + 1)
     finally:
-        close = getattr(response, "close", None)
-        if close:
-            close()
-    if len(body) > 20 * 1024 * 1024:
+        response.close()
+    if len(body) > MAX_RESPONSE_BYTES:
         raise FeedError(
             "The feed response was larger than 20 MB and was not saved. "
             "Create a feed with a shorter time range.",
@@ -342,29 +350,65 @@ class Store:
     def read_jsonl(self) -> list[dict]:
         if not self.jsonl_path.is_file():
             return []
+        with open(self.root / ".store.lock", "a", encoding="utf-8") as lock:
+            _lock_file(lock)
+            try:
+                return self._read_jsonl()
+            finally:
+                _unlock_file(lock)
+
+    def _read_jsonl(self) -> list[dict]:
+        """Caller holds the store lock. Preserve corrupt bytes before repairing."""
+        if not self.jsonl_path.is_file():
+            return []
+        original = self.jsonl_path.read_bytes()
         rows = []
-        for line in self.jsonl_path.read_text(encoding="utf-8").splitlines():
-            stripped = line.strip()
-            if stripped:
-                rows.append(json.loads(stripped))
+        damaged = 0
+        for line in original.splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+                if not isinstance(row, dict) or not isinstance(row.get("event_id"), str) or not row["event_id"].strip():
+                    raise ValueError("Invalid stored record")
+                if not isinstance(row.get("type"), str):
+                    raise ValueError("Invalid record type")
+                if isinstance(row.get("raw"), dict):
+                    raw_id = row["raw"].get("event_id")
+                    if not isinstance(raw_id, str) or not raw_id.strip():
+                        raise ValueError("Legacy inferred identity requires review")
+                parse_dt(row["recorded_at"])
+                rows.append(row)
+            except (ValueError, UnicodeDecodeError, KeyError, TypeError, AttributeError):
+                damaged += 1
+        if damaged:
+            with tempfile.NamedTemporaryFile("wb", dir=self.root, prefix="records.corrupt.", suffix=".bak", delete=False) as backup:
+                backup.write(original)
+            recovered = {row["event_id"]: row for row in load_snapshots(self.root)}
+            # Preserve valid canonical edits, even when snapshots are older.
+            recovered.update({row["event_id"]: row for row in rows})
+            rows = list(recovered.values())
+            _atomic_write(self.jsonl_path, _render_jsonl(rows))
+            _atomic_write(self.csv_path, _render_csv(rows))
+            warnings.warn(
+                f"Repaired records.jsonl after {damaged} invalid line(s); original bytes saved in records.corrupt.*.bak. "
+                "Valid rows and available snapshots were retained. History may be incomplete; review the backup.",
+                RuntimeWarning,
+            )
         return rows
 
-    def upsert_records(self, incoming: list[dict], seen_at: str, exclude_snapshot: str | None = None) -> tuple[int, int, int]:
+    def upsert_records(self, incoming: list[dict], seen_at: str, exclude_snapshot: str | None = None) -> tuple[int, int]:
         self.root.mkdir(parents=True, exist_ok=True)
         lock = open(self.root / ".store.lock", "a", encoding="utf-8")
         try:
             _lock_file(lock)
-            rows = self.read_jsonl()
+            rows = self._read_jsonl()
             if not rows:
                 rows = load_snapshots(self.root, exclude_snapshot=exclude_snapshot)
             existing = {row["event_id"]: row for row in rows}
             inserted = 0
             updated = 0
-            skipped = 0
             for record in incoming:
-                if record is None:
-                    skipped += 1
-                    continue
                 current = existing.get(record["event_id"])
                 if current is None:
                     record["first_seen_at"] = seen_at
@@ -382,28 +426,20 @@ class Store:
             )
             _atomic_write(self.jsonl_path, _render_jsonl(ordered))
             _atomic_write(self.csv_path, _render_csv(ordered))
-            return inserted, updated, skipped
+            return inserted, updated
         finally:
             _unlock_file(lock)
             lock.close()
 
 
 def _lock_file(handle) -> None:
-    try:
-        import fcntl
-
+    if fcntl is not None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
-    except ImportError:
-        return
 
 
 def _unlock_file(handle) -> None:
-    try:
-        import fcntl
-
+    if fcntl is not None:
         fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-    except ImportError:
-        return
 
 
 def _atomic_write(path: Path, text: str) -> None:
@@ -440,8 +476,6 @@ def _csv_safe(value) -> str:
 
 
 def _render_csv(rows: list[dict]) -> str:
-    from io import StringIO
-
     buffer = StringIO()
     writer = csv.DictWriter(buffer, fieldnames=CSV_COLUMNS, lineterminator="\n")
     writer.writeheader()
@@ -474,7 +508,11 @@ def load_snapshots(data_dir: Path, exclude_snapshot: str | None = None) -> list[
             continue
         if not isinstance(payload, dict) or not isinstance(payload.get("records"), list):
             continue
-        incoming, _skipped = records_from_payload(payload, path.name, seen_at)
+        try:
+            incoming, _skipped = records_from_payload(payload, path.name, seen_at)
+        except FeedError:
+            warnings.warn("Skipped a snapshot without valid event IDs; history may be incomplete. Original snapshot retained.", RuntimeWarning)
+            continue
         for record in incoming:
             merged[record["event_id"]] = record
     return list(merged.values())
@@ -514,13 +552,13 @@ def fetch_and_store(
     )
     seen_at = utc_now_iso(moment)
     incoming, skipped = records_from_payload(payload, snapshot.name, seen_at)
-    inserted, updated, upsert_skipped = Store(data_dir).upsert_records(incoming, seen_at, exclude_snapshot=snapshot.name)
+    inserted, updated = Store(data_dir).upsert_records(incoming, seen_at, exclude_snapshot=snapshot.name)
     result = {
         "snapshot": snapshot.name,
         "fetched": len(payload.get("records") or []),
         "inserted": inserted,
         "updated": updated,
-        "skipped": skipped + upsert_skipped,
+        "skipped": skipped,
         "schema_version": version,
         "postgres": None,
     }
@@ -553,8 +591,6 @@ def food_labels(memo) -> list[str]:
 
 
 def _split_foods(memo: str) -> list[str]:
-    import re
-
     return re.split(r"[,;\n]+", memo)
 
 
@@ -577,9 +613,12 @@ def _measurement(record: dict, unit: str):
     return None
 
 
-def sleep_stretches(records: list[dict]) -> list[tuple[datetime, datetime]]:
+def sleep_stretches(records: list[dict], max_hours: float = DEFAULT_MAX_SLEEP_HOURS) -> tuple[list, list]:
+    if not math.isfinite(max_hours) or max_hours <= 0:
+        raise FeedError("--max-sleep-hours must be a finite positive number.", exit_code=2)
     pending = None
     stretches = []
+    rejected = []
     ordered = sorted(records, key=lambda row: (parse_dt(row["recorded_at"]), row.get("event_id") or ""))
     for record in ordered:
         moment = parse_dt(record["recorded_at"])
@@ -587,9 +626,12 @@ def sleep_stretches(records: list[dict]) -> list[tuple[datetime, datetime]]:
         if kind == "Sleep":
             pending = moment
         elif kind == "WakeUp" and pending is not None and moment > pending:
-            stretches.append((pending, moment))
+            if moment - pending > timedelta(hours=max_hours):
+                rejected.append((pending, moment))
+            else:
+                stretches.append((pending, moment))
             pending = None
-    return stretches
+    return stretches, rejected
 
 
 def _day_bounds(day: date, tz: ZoneInfo) -> tuple[datetime, datetime]:
@@ -630,10 +672,15 @@ def load_coverage(data_dir: Path, now: datetime | None = None) -> dict:
                 continue
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
             continue
+        try:
+            records_from_payload(payload, path.name, "")
+        except FeedError:
+            continue
         intervals.append((left, right))
         latest = max(latest, generated) if latest else generated
     moment = now or datetime.now(timezone.utc)
     return {
+        "store_repair_warning": any(data_dir.glob("records.corrupt.*.bak")),
         "intervals": intervals,
         "latest_generated_at": utc_now_iso(latest) if latest else None,
         "freshness": ("stale" if moment - latest > timedelta(hours=24) else "recent") if latest else "unknown",
@@ -660,6 +707,10 @@ def day_coverage(day: date, tz: ZoneInfo, coverage: dict | None) -> str:
 
 def _milk_display(day: dict, kind: str) -> str:
     missing = day["milk_missing_amount_count"][kind]
+    if missing and kind in OPTIONAL_MILK_TYPES:
+        known = day['milk_known_ml'][kind]
+        label = "optional amount not recorded" if kind == "BreastFeeding" else "volume not recorded (not baby intake)"
+        return f"{label}; known volume {known} ml" if known else label
     if missing:
         return f"unknown total (known {day['milk_known_ml'][kind]} ml; {missing} record(s) without amount)"
     value = day["milk_ml"][kind]
@@ -667,10 +718,11 @@ def _milk_display(day: dict, kind: str) -> str:
 
 
 def summarize(records: list[dict], tz: ZoneInfo, start: date, end: date,
-              coverage: dict | None = None) -> dict:
+              coverage: dict | None = None,
+              max_sleep_hours: float = DEFAULT_MAX_SLEEP_HOURS) -> dict:
     if end < start:
         raise FeedError("--from is after --to.", exit_code=2)
-    stretches = sleep_stretches(records)
+    stretches, rejected_sleep = sleep_stretches(records, max_sleep_hours)
     first_food: dict[str, tuple[date, str]] = {}
     for record in records:
         if record.get("type") != "Solid":
@@ -753,6 +805,8 @@ def summarize(records: list[dict], tz: ZoneInfo, start: date, end: date,
                 "coverage": day_coverage(cursor, tz, coverage),
                 "breastfeeding_minutes": _as_number(breast_seconds / 60.0),
                 "sleep": {
+                    "excluded_long_pairs": sum(1 for a, b in rejected_sleep if _overlap_minutes(a, b, cursor, tz) > 0),
+                    "pairing_limit_hours": max_sleep_hours,
                     "total_minutes": _as_number(total_sleep),
                     "longest_stretch_minutes": _as_number(longest),
                     "stretch_count": len(overlapping),
@@ -775,12 +829,13 @@ def summarize(records: list[dict], tz: ZoneInfo, start: date, end: date,
         "from": start.isoformat(),
         "to": end.isoformat(),
         "record_count": len(records),
+        "milk_optional_amount_types": list(OPTIONAL_MILK_TYPES),
         "days": days,
         "disclaimer": DISCLAIMER,
         "notes": [
             "Feed timestamps are UTC and are grouped by the timezone above.",
-            "Milk millilitres are summed only when the feed sends a positive ml value. Breastfeeding duration is not converted into millilitres.",
-            "Sleep total is the portion of each Sleep-to-WakeUp stretch that falls on that local day. Longest stretch is the full stretch, including time on neighboring days. An unpaired Sleep or WakeUp is not counted.",
+            "Missing bottle amounts make the bottle total unknown. BreastFeeding and Pumping amounts are optional; known ml and missing counts remain separate. Breastfeeding duration is not converted into millilitres, and pumping is not baby intake.",
+            "Sleep total is the portion of each Sleep-to-WakeUp stretch that falls on that local day. Longest stretch is the full stretch, including time on neighboring days. Unpaired events and pairs over the configured pairing limit are excluded; this is a data-quality rule, not a medical cutoff.",
             "Diaper gap is the longest interval that ends at a pee or poop logged on that day. Poop gap uses poop records only.",
             "Solid foods come from the memo text. first_seen is the earliest local date that food appears in the loaded records, which may be before this range.",
         ],
@@ -818,6 +873,8 @@ def render_markdown(summary: dict) -> str:
     ]
     status = summary.get("data_status", {})
     lines.append(f"Latest feed generation: {status.get('latest_generated_at') or 'unknown'}. Freshness: {status.get('freshness', 'unknown')}.")
+    if status.get("store_repair_warning"):
+        lines.append("Store recovery warning: a corrupt-store backup exists. History may be incomplete; review the preserved original before relying on totals.")
     lines.append("")
     for day in summary["days"]:
         diapers = day["diapers"]
@@ -846,6 +903,8 @@ def render_markdown(summary: dict) -> str:
                 count=sleep["stretch_count"],
             )
         )
+        if sleep["excluded_long_pairs"]:
+            lines.append(f"- Sleep data warning: {sleep['excluded_long_pairs']} pair(s) exceeded the {sleep['pairing_limit_hours']}-hour pairing limit and were excluded. Totals are incomplete; check missing wake records. This is a data-quality rule, not a medical cutoff.")
         gap = "n/a" if diapers["longest_gap_minutes"] is None else f"{_fmt_minutes(diapers['longest_gap_minutes'])} minutes"
         poop_gap = (
             "n/a"
@@ -896,24 +955,9 @@ ON CONFLICT (source_file) DO NOTHING;
 
 
 def sql_rows_from_payload(payload: dict, source_file: str) -> tuple[dict, dict]:
-    records = {}
+    normalized, _skipped = records_from_payload(payload, source_file, "")
+    records = {row["event_id"]: row for row in normalized}
     raw_records = payload.get("records") or []
-    for raw in raw_records:
-        normalized = normalize_record(raw, source_file, "")
-        if normalized is None:
-            continue
-        records[normalized["event_id"]] = {
-            "event_id": normalized["event_id"],
-            "recorded_at": normalized["recorded_at"],
-            "type": normalized["type"],
-            "amount_ml": normalized["amount_ml"],
-            "left_sec": normalized["left_sec"],
-            "right_sec": normalized["right_sec"],
-            "memo": normalized["memo"],
-            "details": normalized["details"],
-            "raw": raw,
-            "source_file": source_file,
-        }
     log = {
         "source_file": source_file,
         "generated_at": payload.get("generated_at"),
@@ -944,10 +988,6 @@ def write_sql_files(sql_dir: Path, upsert: str, fetch_log: str) -> None:
     _atomic_write(sql_dir / "fetchlog.sql", fetch_log)
 
 
-def split_sql(text: str) -> list[str]:
-    return [chunk.strip() for chunk in text.split(";") if chunk.strip()]
-
-
 def apply_postgres_payload(payload: dict, source_file: str, database_url: str, sql_dir: Path) -> None:
     if not database_url.strip():
         raise FeedError(
@@ -960,85 +1000,48 @@ def apply_postgres_payload(payload: dict, source_file: str, database_url: str, s
     write_sql_files(sql_dir, upsert, fetch_log)
     schema = SCHEMA_PATH.read_text(encoding="utf-8")
     # Generated upserts are single statements; memo text may contain semicolons.
-    statements = split_sql(schema) + [upsert, fetch_log]
+    statements = [schema, upsert, fetch_log]
     apply_sql(database_url.strip(), statements)
 
 
-def apply_sql(database_url: str, statements: list[str]) -> str:
+def apply_sql(database_url: str, statements: list[str]) -> None:
     try:
-        driver = _apply_with_python_driver(database_url, statements)
+        if psycopg is not None:
+            with psycopg.connect(database_url) as connection:
+                with connection.cursor() as cursor:
+                    for statement in statements:
+                        cursor.execute(statement)
+            return
+        if shutil.which("psql"):
+            _apply_with_psql(database_url, statements)
+            return
     except FeedError:
         raise
     except Exception as exc:
         raise FeedError(
-            "Postgres update failed. Local files were saved. "
-            + redact(f"{type(exc).__name__}", [database_url]),
+            "Postgres update failed. Local files were saved. " + type(exc).__name__,
             exit_code=6,
         ) from exc
-    if driver:
-        return driver
-    if shutil.which("psql"):
-        _apply_with_psql(database_url, statements)
-        return "psql"
     raise FeedError(
         "Postgres was requested, and local files were saved, but neither psycopg nor psql is installed. "
-        "Install one of them, or run without --backend postgres.",
+        "Install psycopg[binary] or psql, or run without --backend postgres.",
         exit_code=6,
     )
 
 
-def _apply_with_python_driver(database_url: str, statements: list[str]) -> str | None:
-    try:
-        import psycopg
-    except ImportError:
-        psycopg = None
-    if psycopg is not None:
-        with psycopg.connect(database_url) as connection:
-            with connection.cursor() as cursor:
-                for statement in statements:
-                    cursor.execute(statement)
-            connection.commit()
-        return "psycopg"
-    try:
-        import psycopg2
-    except ImportError:
-        psycopg2 = None
-    if psycopg2 is None:
-        return None
-    connection = psycopg2.connect(database_url)
-    try:
-        with connection.cursor() as cursor:
-            for statement in statements:
-                cursor.execute(statement)
-        connection.commit()
-    finally:
-        connection.close()
-    return "psycopg2"
-
-
 def _apply_with_psql(database_url: str, statements: list[str]) -> None:
-    script = ";\n".join(statements) + ";\n"
-    handle = tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".sql", delete=False)
-    path = handle.name
-    try:
-        handle.write(script)
-        handle.close()
-        completed = subprocess.run(
-            ["psql", database_url, "-v", "ON_ERROR_STOP=1", "-f", path],
-            capture_output=True,
-            text=True,
-        )
-    finally:
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+    environment = dict(os.environ, PGDATABASE=database_url)
+    # libpq accepts a connection URI in PGDATABASE. Never put credentials in argv.
+    completed = subprocess.run(
+        ["psql", "-X", "-w", "-v", "ON_ERROR_STOP=1", "--single-transaction", "-f", "-"],
+        input="\n".join(statements),
+        env=environment,
+        capture_output=True,
+        text=True,
+    )
     if completed.returncode != 0:
-        detail = redact((completed.stderr or completed.stdout or "").strip(), [database_url])
-        raise FeedError(
-            "psql failed. Local files were saved. " + (detail or "No details."),
-            exit_code=6,
-        )
+        # Server diagnostics can echo fragments of credentials or private records.
+        raise FeedError("psql failed. Local files were saved; private diagnostics were suppressed.", exit_code=6)
 
 
 def window_from_days(days: int, tz: ZoneInfo, now: datetime | None = None) -> tuple[date, date]:

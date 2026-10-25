@@ -48,7 +48,13 @@ Per local day (timezone `PIYOLOG_TZ`, default `Asia/Tokyo`; feed timestamps are 
 
 Existing SQLite files from older versions are left untouched but are no longer updated. JSONL remains the canonical store.
 
-Summaries report feed coverage (complete, partial, missing, or unknown) and freshness (stale means the latest feed generation is over 24 hours old; recent does not guarantee the latest scheduled fetch succeeded). Coverage is derived from retained snapshot ranges; without those snapshots it is unknown. Missing milk amounts are unknown, with known amounts and missing-entry counts reported separately. Partial days, gaps, and stale data must not be interpreted as complete daily totals.
+Summaries report feed coverage (complete, partial, missing, or unknown) and freshness (stale means the latest feed generation is over 24 hours old; recent does not guarantee the latest scheduled fetch succeeded). Coverage is derived from retained snapshot ranges; without those snapshots it is unknown. Missing bottle amounts make bottle totals unknown. Breastfeeding and pumping volumes are optional and shown separately without bottle-intake warnings; known amounts and missing-entry counts remain available in JSON. Partial days, gaps, and stale data must not be interpreted as complete daily totals.
+
+Sleep pairs longer than 24 hours are excluded and flagged for review. Use `--max-sleep-hours` to change this data-quality limit; it is not a medical cutoff, and shorter pairs can still be wrong if wake records are missing. Normal overnight sleep is split across dates as before.
+
+Records without the official `event_id` are not assigned guessed hashes. Fetch keeps the raw snapshot and fails without merging the response. Correct the source rather than inventing IDs. When loading old snapshots, invalid-ID snapshots are skipped with a warning; they are retained for review.
+
+If `records.jsonl` contains corrupt lines or old inferred identities, the tool first saves its original bytes to a private `records.corrupt.*.bak`, then rebuilds from valid rows and available snapshots under the store lock. Recovery cannot recreate records absent from all surviving sources. Briefings keep a recovery warning while the backup exists; review it before relying on totals or removing the backup.
 
 Markdown rounds minutes to whole numbers; JSON keeps exact values. A record deleted in the app disappears from later feeds but stays in the local store.
 
@@ -122,6 +128,8 @@ python3 fetch.py && python3 summarize.py --days 1
 ### サマリーの内容
 
 現地の1日ごと（タイムゾーンは `PIYOLOG_TZ`、既定は `Asia/Tokyo`。フィードの時刻は UTC）に、種類別ミルク量（ml）、授乳時間（分。ml には換算しません）、睡眠の合計と最長区間（`Sleep` と `WakeUp` をペアにします）、おしっこ・うんちの回数と最長間隔、離乳食（メモから抽出、初出日つき）、最高体温、その他の記録回数を出します。搾乳は「飲んだミルク」には数えません。
+
+容量が未入力の哺乳瓶記録は合計不明として表示します。直接授乳・搾乳の容量は任意項目です。24時間を超える睡眠ペアは集計から除外して確認を促します（`--max-sleep-hours` で変更可能。医療上の基準ではありません）。破損した保存ファイルは原本をバックアップしてから復旧し、欠落の可能性を警告します。
 
 ### フィードの仕様（公式ガイドより、2026年10月確認）
 

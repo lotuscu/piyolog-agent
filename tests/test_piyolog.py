@@ -3,10 +3,10 @@
 
 from __future__ import annotations
 
-import hashlib
 import io
 import json
 import sys
+import tempfile
 import unittest
 import urllib.error
 from datetime import date, datetime, timezone
@@ -17,6 +17,9 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import piyolog
+import fetch
+import summarize
+import to_postgres_sql
 
 FIXTURE = ROOT / "tests" / "fixtures" / "synthetic_feed.json"
 TZ = piyolog.resolve_tz("Asia/Tokyo")
@@ -35,13 +38,9 @@ def normalized_fixture(seen_at: str = "2026-09-09T00:00:00Z") -> list[dict]:
 
 
 class EventIdTests(unittest.TestCase):
-    def test_fallback_md5_matches_type_and_datetime(self):
-        raw = {"datetime": "2026-09-08T22:00:00Z", "type": "Pee"}
-        expected = hashlib.md5(b"Pee|2026-09-08T22:00:00Z").hexdigest()
-        self.assertEqual(piyolog.event_id_for(raw), expected)
-        stored = [row for row in normalized_fixture() if row["memo"] == "no event id on purpose"]
-        self.assertEqual(len(stored), 1)
-        self.assertEqual(stored[0]["event_id"], expected)
+    def test_missing_event_id_is_rejected_instead_of_guessed(self):
+        with self.assertRaises(piyolog.FeedError):
+            piyolog.event_id_for({"datetime": "2026-09-08T22:00:00Z", "type": "Pee"})
 
     def test_amount_ignores_celsius_and_accepts_ml(self):
         self.assertIsNone(
@@ -59,14 +58,14 @@ class StoreTests(unittest.TestCase):
             first, _skipped = piyolog.records_from_payload(
                 load_fixture(), "one.json", "2026-09-09T00:00:00Z"
             )
-            inserted, updated, skipped = store.upsert_records(first, "2026-09-09T00:00:00Z")
-            self.assertEqual((inserted, updated, skipped), (len(first), 0, 0))
+            inserted, updated = store.upsert_records(first, "2026-09-09T00:00:00Z")
+            self.assertEqual((inserted, updated), (len(first), 0))
             changed = json.loads(json.dumps(load_fixture()))
             changed["records"][1]["memo"] = "updated note"
             second, _skipped = piyolog.records_from_payload(
                 changed, "two.json", "2026-09-09T01:00:00Z"
             )
-            inserted, updated, skipped = store.upsert_records(second, "2026-09-09T01:00:00Z")
+            inserted, updated = store.upsert_records(second, "2026-09-09T01:00:00Z")
             self.assertEqual(inserted, 0)
             self.assertEqual(updated, len(second))
             rows = store.read_jsonl()
@@ -81,8 +80,6 @@ class StoreTests(unittest.TestCase):
             self.assertFalse((root / "records.sqlite").exists())
 
     def _temp(self):
-        import tempfile
-
         return tempfile.TemporaryDirectory()
 
 
@@ -193,8 +190,6 @@ class FetchTests(unittest.TestCase):
             self.assertEqual(caught.exception.exit_code, 4)
 
     def test_fetch_writes_store_without_printing_url(self):
-        import tempfile
-
         secret = "another-secret-token"
         url = "https://feed.example.test/private/" + secret
         body = FIXTURE.read_bytes()
@@ -202,8 +197,8 @@ class FetchTests(unittest.TestCase):
         class Response:
             status = 200
 
-            def read(self):
-                return body
+            def read(self, size=-1):
+                return body[:size] if size >= 0 else body
 
             def close(self):
                 return None
@@ -282,8 +277,6 @@ class SqlTests(unittest.TestCase):
 
 
 def piyolog_fetch_main(argv):
-    import fetch
-
     stderr = io.StringIO()
     previous = sys.stderr
     sys.stderr = stderr
@@ -297,22 +290,10 @@ def piyolog_fetch_main(argv):
     return code
 
 
-class RedactTests(unittest.TestCase):
-    def test_redact_removes_constructed_url(self):
-        secret_url = "postgres" + "://" + "user:secret-pass@example.test/db"
-        cleaned = piyolog.redact("failed " + secret_url, [secret_url])
-        self.assertNotIn("secret-pass", cleaned)
-        self.assertIn("[redacted]", cleaned)
-
-
 class CliDefaultsTests(unittest.TestCase):
     def test_cli_defaults_are_anchored_to_the_repo_directory(self):
         # An agent may run these scripts from any working directory (for
         # example a scheduled job). Defaults must not depend on the cwd.
-        import fetch
-        import summarize
-        import to_postgres_sql
-
         for module in (fetch, summarize, to_postgres_sql):
             args = module.build_parser().parse_args([])
             data_dir = Path(args.data_dir)

@@ -34,6 +34,8 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         help="Number of local days ending today. Ignored when --from and --to are set. Default: 1.",
     )
+    parser.add_argument("--max-sleep-hours", type=float, default=piyolog.DEFAULT_MAX_SLEEP_HOURS,
+                        help="Exclude longer sleep pairs and flag them for review (default: 24 hours; not a medical cutoff).")
     parser.add_argument(
         "--tz",
         help=f"Timezone for day boundaries (default: PIYOLOG_TZ or {piyolog.DEFAULT_TZ}).",
@@ -62,9 +64,10 @@ def run(argv: list[str] | None = None) -> int:
         start = piyolog.parse_day(args.start)
         end = piyolog.parse_day(args.end)
     else:
-        start, end = piyolog.window_from_days(args.days or 1, tz, datetime.now(timezone.utc))
+        start, end = piyolog.window_from_days(args.days if args.days is not None else 1, tz, datetime.now(timezone.utc))
     records = piyolog.load_records(Path(args.data_dir), source=args.source)
-    summary = piyolog.summarize(records, tz, start, end, coverage=piyolog.load_coverage(Path(args.data_dir)))
+    summary = piyolog.summarize(records, tz, start, end, coverage=piyolog.load_coverage(Path(args.data_dir)),
+                                max_sleep_hours=args.max_sleep_hours)
     markdown = piyolog.render_markdown(summary)
     rendered_json = piyolog.render_json(summary)
     if args.output:

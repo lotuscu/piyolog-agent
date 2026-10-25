@@ -81,7 +81,8 @@
     {
       "datetime": "2026-09-08T22:00:00Z",
       "type": "Pee",
-      "memo": "no event id on purpose"
+      "event_id": "syn-pee-2",
+      "memo": "synthetic second pee"
     }
   ]
 }

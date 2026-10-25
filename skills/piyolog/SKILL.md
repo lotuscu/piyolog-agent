@@ -22,11 +22,13 @@ python3 ~/workspace/piyolog-agent/fetch.py
 python3 ~/workspace/piyolog-agent/summarize.py --days 2 --format both
 ```
 
-Only run the summary if fetch exits successfully (`fetch.py && summarize.py`). On any fetch failure, report the failure instead of presenting stale data as current. Preserve coverage, freshness and missing-amount warnings; unknown is not zero.
+Only run the summary if fetch exits successfully (`fetch.py && summarize.py`). On any fetch failure, report the failure instead of presenting stale data as current. Preserve coverage, freshness, sleep-pair exclusion, store-recovery and missing-bottle-amount warnings; unknown is not zero.
 
 Run the fetch about twice a day (for example 06:00 and 17:00 in the parent's timezone). A free feed covers about 24 hours and expires 90 days after creation. Do not poll faster than about once a minute.
 
 If the fetch reports HTTP 401 or 404, ask the parent to create a new feed in the PiyoLog app (Settings → Data Feed). Do not invent a URL or numbers.
+
+Missing event IDs must not be guessed. A rejected response remains in its raw snapshot. Preserve corrupt-store backups until reviewed. The sleep pairing limit is a data-quality rule, not medical advice. Breastfeeding/pumping volume is optional and is not a missing bottle-intake warning.
 
 ## Briefing
 
