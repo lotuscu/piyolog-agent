@@ -848,6 +848,11 @@ def render_json(summary: dict) -> str:
     return json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
 
+def _fmt_minutes(value) -> str:
+    """Whole minutes for human-readable Markdown. JSON keeps the exact value."""
+    return str(int(round(float(value))))
+
+
 def render_markdown(summary: dict) -> str:
     lines = [
         f"# PiyoLog summary ({summary['timezone']})",
@@ -869,22 +874,22 @@ def render_markdown(summary: dict) -> str:
                 expressed=milk["ExpressedBreastMilk"],
                 breast=milk["BreastFeeding"],
                 pumping=milk["Pumping"],
-                minutes=day["breastfeeding_minutes"],
+                minutes=_fmt_minutes(day["breastfeeding_minutes"]),
             )
         )
         lines.append(
             "- Sleep: total {total} minutes on this date, longest stretch {longest} minutes "
             "({count} paired stretches overlapping this date).".format(
-                total=sleep["total_minutes"],
-                longest=sleep["longest_stretch_minutes"],
+                total=_fmt_minutes(sleep["total_minutes"]),
+                longest=_fmt_minutes(sleep["longest_stretch_minutes"]),
                 count=sleep["stretch_count"],
             )
         )
-        gap = "n/a" if diapers["longest_gap_minutes"] is None else f"{diapers['longest_gap_minutes']} minutes"
+        gap = "n/a" if diapers["longest_gap_minutes"] is None else f"{_fmt_minutes(diapers['longest_gap_minutes'])} minutes"
         poop_gap = (
             "n/a"
             if diapers["poop_longest_gap_minutes"] is None
-            else f"{diapers['poop_longest_gap_minutes']} minutes"
+            else f"{_fmt_minutes(diapers['poop_longest_gap_minutes'])} minutes"
         )
         lines.append(
             f"- Diaper: pee {diapers['pee']}, poop {diapers['poop']}, "
