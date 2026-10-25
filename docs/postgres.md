@@ -1,31 +1,36 @@
 # Optional Postgres
 
-`fetch.py` stores everything in local files. You do not need a database.
+`fetch.py` stores everything in local files. You do not need a database, and `summarize.py` never reads one.
 
-If you also want Postgres (for example Neon serverless Postgres, or any other Postgres you run), create your own project and copy the connection string from that project's console into `DATABASE_URL`. Do not commit the string, the project id, or the branch id.
-
-Apply the schema once, or let `fetch.py` apply it for you. `schema.sql` uses `CREATE TABLE IF NOT EXISTS` and is safe to re-run.
+To also keep a copy in your own Postgres (for example Neon), put that project's connection string in `DATABASE_URL`. Do not commit the string, a project id, or a branch id.
 
 ```bash
-psql "$DATABASE_URL" -f schema.sql
 python3 fetch.py --backend postgres
 ```
 
-`--backend postgres` still writes the local snapshot, JSONL, CSV, and SQLite files. It then writes `sql/upsert.sql` and `sql/fetchlog.sql` and applies them.
+That still writes the local snapshot, JSONL, CSV, and SQLite files first. It then writes `sql/upsert.sql` and `sql/fetchlog.sql` and applies `schema.sql` plus those files (all idempotent, safe to re-run):
 
-- Records use `ON CONFLICT (event_id) DO UPDATE`. `last_seen_at` moves forward. `first_seen_at` stays.
+- Records use `ON CONFLICT (event_id) DO UPDATE`. `last_seen_at` moves forward; `first_seen_at` stays.
 - The fetch log uses `ON CONFLICT (source_file) DO NOTHING`.
 - When the feed omits `event_id`, the key is `md5(type|datetime)`.
 
-The tool uses the `psycopg` package if it is already installed, then `psycopg2`, then the `psql` client. None of those are required for the default local store. If you ask for Postgres and none of them is available, the local files are still saved and the command exits with an error.
+A driver must already be present: the tool tries `psycopg`, then `psycopg2`, then the `psql` client. If none is available, the local files are still saved and the command exits with an error.
 
-`python3 to_neon_sql.py` only builds the SQL files from snapshots. It does not connect.
+**On Muse** none of those is preinstalled. This works (verified October 2026, psycopg 3.3.6):
 
 ```bash
-python3 to_neon_sql.py --data-dir data --sql-dir sql
-python3 to_neon_sql.py --all
+cd ~/workspace/piyolog-briefing
+python3 -m venv .venv
+.venv/bin/pip install 'psycopg[binary]'
+DATABASE_URL='...' .venv/bin/python fetch.py --backend postgres
+```
+
+Use the venv inside the repository (`.venv/` is gitignored): installs in system or temporary locations do not survive a machine reset. Pure-Python `pg8000` is **not** supported by this tool.
+
+`python3 to_neon_sql.py` only builds the SQL files from snapshots; it does not connect. Apply them yourself with:
+
+```bash
+python3 to_neon_sql.py --data-dir data --sql-dir sql   # or --all for every snapshot
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/upsert.sql
 psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f sql/fetchlog.sql
 ```
-
-`summarize.py` reads the local store, not Postgres.

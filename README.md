@@ -1,22 +1,23 @@
 # PiyoLog briefing
 
-Unofficial local tools that let a parent point an AI agent at their own [PiyoLog](https://www.piyolog.com/app/piyolog/data_feed/en/index.html) data feed and get a repeatable daily summary.
+English | [日本語](#日本語)
 
-**This project is not affiliated with, endorsed by, or maintained by the makers of PiyoLog.** PiyoLog is their product. This repository only fetches the feed the parent creates and summarizes it on their machine.
+Unofficial local tools that let a parent point an AI agent at their own [PiyoLog](https://www.piyolog.com/app/piyolog/data_feed/en/index.html) data feed and get a repeatable daily summary of feeding, sleep, and diapers.
 
-An agent that will run this project should read [AGENTS.md](AGENTS.md) once and then follow it. Humans can start below.
+**Not affiliated with, endorsed by, or maintained by the makers of PiyoLog.** This repository only fetches the feed the parent creates and summarizes it on their own machine.
 
-The feed URL is a password. Do not commit it, paste it into a public issue, or leave it in a screenshot.
+The feed URL is a password. Do not commit it, post it, or screenshot it.
 
-## Quick start
+## For AI agents
 
-You need Python 3.9 or newer. There is nothing to install.
+Read [AGENTS.md](AGENTS.md) and follow it. It contains a complete, self-contained setup for **Muse** (install the skill, store the secret, schedule twice-daily briefings) and shorter notes for other agents. A ready-made skill file is at [skills/piyolog/SKILL.md](skills/piyolog/SKILL.md).
 
-**1. Create a feed in the PiyoLog app and copy the URL.**
+## Quick start (humans)
 
-On iOS: Settings, Data Feed, Create New Feed. Pick the child, a time range, and an expiration, then copy the URL from the feed details screen. There is no separate API key. The URL is the credential.
+Python 3.9 or newer. Nothing to install.
 
-**2. Save that URL locally, not in git.**
+1. In the PiyoLog app: Settings → Data Feed → Create New Feed. Pick the child, a time range, and an expiration, then copy the URL. There is no separate API key; the URL is the credential.
+2. Save the URL locally, never in git:
 
 ```bash
 git clone https://github.com/lotuscu/piyolog-briefing.git
@@ -24,137 +25,108 @@ cd piyolog-briefing
 printf '%s\n' 'PASTE-YOUR-FEED-URL-HERE' > .feed_url
 ```
 
-Or export `PIYOLOG_FEED_URL` in the shell. `.feed_url` and `.env` are gitignored. Names are listed in `.env.example`.
+(Or export `PIYOLOG_FEED_URL`. `.feed_url` and `.env` are gitignored; see `.env.example`.)
 
-**3. Fetch the feed and print today's summary.**
+3. Fetch and summarize:
 
 ```bash
 python3 fetch.py
 python3 summarize.py --days 1
 ```
 
-A free feed expires 90 days after you create it. When it does, `fetch.py` tells you to make a new one. It does not print the URL.
+`fetch.py` writes a timestamped snapshot plus a deduplicated store under `data/` (`records.jsonl` is canonical; CSV and SQLite views are generated from it). Run it about twice a day: a free feed only returns the last ~24 hours, so a longer gap loses records for good. The store keeps what you already fetched, keyed by `event_id`.
 
-`fetch.py` writes a timestamped snapshot plus a deduplicated store under `data/`:
+## What the summary reports
 
-- `records.jsonl` is the canonical store (one record per line, keyed by `event_id`)
-- `records.csv` is a flat view
-- `records.sqlite` is a SQLite file (stdlib) with the same rows
+Per local day (timezone `PIYOLOG_TZ`, default `Asia/Tokyo`; feed timestamps are UTC):
 
-Run `fetch.py` about twice a day. A free feed only returns the last 24 hours, so a longer gap can drop records that will not appear again. The store keeps what you have already fetched and updates a row when the same `event_id` shows up again.
+- Milk ml by type (formula, expressed breast milk, breastfeeding amount, pumping — pumping is **not** counted as a bottle the baby drank)
+- Breastfeeding minutes (left + right). Minutes are never converted to ml.
+- Sleep total and longest stretch. `Sleep` and `WakeUp` are separate records; the tool pairs each `Sleep` with the next `WakeUp` and splits stretches at midnight.
+- Pee and poop counts and longest gaps; solid foods from the memo with the first date each food appears; max temperature; counts of vomiting, rash, cough, medicine, hospital, injury when logged.
 
-Day boundaries use `PIYOLOG_TZ`, or `Asia/Tokyo` when that is unset. Feed timestamps are UTC.
+Markdown rounds minutes to whole numbers; JSON keeps exact values. A record deleted in the app disappears from later feeds but stays in the local store.
 
-## Example prompt
+## Feed facts (from the official guide, checked October 2026)
 
-Paste this into Grok Bot, Muse, Dot, Claude, ChatGPT, Cursor, or another agent after the URL is in the environment or in `.feed_url`:
+- [English guide](https://www.piyolog.com/app/piyolog/data_feed/en/index.html) · [Japanese guide](https://www.piyolog.com/app/piyolog/data_feed/ja/index.html)
+- Free account: one feed, ~24-hour range, expires 90 days after creation. Premium: up to five feeds, longer ranges and expirations.
+- Settings cannot be edited. Revoke and recreate to change anything.
+- HTTP 404 `feed_unavailable` means expired, revoked, paused, wrong URL, or deleted child. A brand-new feed can also 404 for about a minute. `fetch.py` treats 401 the same.
+- Do not poll faster than about once a minute. Twice a day is enough.
 
-```
-You have the piyolog-briefing repository. Read AGENTS.md and follow it.
+## Optional Postgres
 
-My PiyoLog feed URL is already in PIYOLOG_FEED_URL or in .feed_url. Treat that URL as a password: never print it, log it, commit it, or send it anywhere.
-
-1. Run: python3 fetch.py
-2. Run: python3 summarize.py --days 2 --format both
-3. Write a short briefing with one line for Feeding, one line for Sleep, one line for Diaper, then one to three sentences.
-4. Use only numbers from the summary. Do not invent records.
-5. This is not medical advice. You may point out when logged milk or sleep looks low, or when temperature, vomiting, rash, cough, injury, medicine, or a hospital visit is present. I will decide what to do, with my child's clinician if needed.
-6. If fetch.py says the feed is unavailable, stop and tell me to create a new data feed in the PiyoLog app. Do not guess a URL.
-```
-
-The same routine is written out in [docs/routine.md](docs/routine.md). A skill file for agents that load skills is [skills/piyolog/SKILL.md](skills/piyolog/SKILL.md).
-
-## How to get the feed URL
-
-Checked against the official guide in October 2026. These pages loaded:
-
-- [Data Feed: user guide and data specification (English)](https://www.piyolog.com/app/piyolog/data_feed/en/index.html)
-- [Official guide (Japanese)](https://www.piyolog.com/app/piyolog/data_feed/ja/index.html)
-- [Developer announcement, 15 September 2026, PiyoLog v9.4.0](https://note.com/y_sakaki/n/nb47c50c0f490)
-
-What that guide says, in short:
-
-- The feature is a read-only HTTPS GET. You create the URL in the iOS app under Settings, Data Feed. Creating a feed needs an administrator on the account.
-- You choose one child, a time range, and an expiration. Those cannot be edited later. Revoke the feed and create a new one to change them.
-- A free account can have one feed, covering 24 hours, expiring 90 days after creation.
-- Premium can have up to five feeds, with a range of 24 hours, 3 days, 7 days, or 28 days, and an expiration of 90 days, 365 days, or none. A feed with no expiration still needs an active Premium entitlement.
-- The URL itself is the secret. Do not post it. If it leaks, revoke it. Revoking does not delete copies another tool already saved.
-- Timestamps are ISO 8601 UTC. The guide's record types are fixed English strings (`Formula`, `BreastFeeding`, `Sleep`, `WakeUp`, `Pee`, `Poop`, `Solid`, and others). The full field list is on the official page.
-- `Sleep` and `WakeUp` are separate records. The feed does not include a sleep duration.
-- Solid food is not a structured menu. The text is in `memo`.
-- The feed does not include the child's name, birth date, sex, photos, diary, or vaccine names.
-- HTTP 404 with error code `feed_unavailable` covers an expired feed, a revoked feed, a paused Premium feed, a wrong URL, and a deleted child. A new feed can also return 404 for a short time right after creation.
-- A 24-hour feed is cached for about a minute. The guide asks you not to hit the same URL more than about once a minute. Twice a day is enough.
-
-`fetch.py` treats HTTP 401 the same as HTTP 404 and tells you to create a new feed. The published guide documents 404 for an unavailable feed, not 401.
-
-## What the summary means
-
-`summarize.py` prints Markdown, JSON, or both (`--format md|json|both`). `--from` and `--to` are inclusive local dates. `--days 2` is yesterday and today in the selected timezone.
-
-Per day it reports:
-
-| Section | Rule |
-| --- | --- |
-| Milk | Millilitres for `Formula`, `ExpressedBreastMilk`, `BreastFeeding`, and `Pumping`, only when the feed sends a positive `ml` value. Duration is not turned into millilitres. Pumping is not counted as a bottle the baby drank. |
-| Breastfeeding | `leftTime` plus `rightTime`, in minutes. The feed sends seconds. |
-| Sleep | Each `Sleep` is paired with the next later `WakeUp`. The daily total is the part of those stretches that falls on that local date. The longest stretch is the full pair, even when it crosses midnight. An unpaired start or wake is omitted. |
-| Diapers | Pee count, poop count, the longest gap that ends at a pee or poop that day, and the longest poop-to-poop gap that ends that day. |
-| Solids | Labels split from the `Solid` memo on commas, semicolons, and new lines. `first_seen` is the earliest local date that label appears in the loaded history, which can be before the requested range. |
-| Temperature and other counts | Max Celsius when a `Temperature` record has a value, plus counts of vomiting, rash, cough, medicine, hospital, and injury. |
-
-The JSON repeats those rules in a `notes` array and includes a disclaimer. Missing numbers are omitted values from the feed, not zeros you should invent. A day with no logged milk shows zeros because nothing in that category was present.
+Local files are the default and the only thing `summarize.py` reads. If you also want a copy in your own Postgres (for example Neon), see [docs/postgres.md](docs/postgres.md). Never commit a connection string.
 
 ## Commands
 
 ```bash
-python3 fetch.py
-python3 fetch.py --tz Asia/Tokyo --data-dir data
-python3 summarize.py --days 2 --format both
+python3 fetch.py                                    # fetch + update local store
+python3 fetch.py --backend postgres               # also upsert into DATABASE_URL
+python3 summarize.py --days 2 --format both         # Markdown + JSON
 python3 summarize.py --from 2026-09-08 --to 2026-09-09 --format json
-python3 -m unittest discover -s tests -t . -v
-```
-
-`tests/fixtures/synthetic_feed.json` is fictional and is the only JSON file intended to be committed. Do not replace it with real records.
-
-If `event_id` is missing, the store key is `md5(type|datetime)` using the timestamp string from the feed. The current feed spec says `event_id` is always present. The fallback is there so an older or partial file still deduplicates.
-
-## Optional Postgres
-
-The default backend is local files. Postgres is not required and is not used by `summarize.py`.
-
-If you want a copy in your own Postgres database, including Neon, set `DATABASE_URL` from that project's console and run:
-
-```bash
-python3 fetch.py --backend postgres
-```
-
-That still writes the local store, then applies `schema.sql` plus an idempotent upsert when `psycopg`, `psycopg2`, or `psql` is available. Details are in [docs/postgres.md](docs/postgres.md). `to_neon_sql.py` only generates `sql/upsert.sql` and `sql/fetchlog.sql` from snapshots. It does not connect.
-
-Do not commit the connection string.
-
-## Layout
-
-| Path | Purpose |
-| --- | --- |
-| `fetch.py` | Download the feed, save a snapshot, update the local store |
-| `summarize.py` | Per-day Markdown and JSON |
-| `piyolog.py` | Shared library (stdlib only) |
-| `to_neon_sql.py` | Optional SQL generator |
-| `schema.sql` | Optional Postgres tables |
-| `AGENTS.md` | Instructions for an assistant |
-| `docs/routine.md` | Generic twice-daily briefing |
-| `docs/postgres.md` | Optional database |
-| `skills/piyolog/SKILL.md` | Short skill for agents that load skills |
-| `tests/fixtures/synthetic_feed.json` | Fake records for tests |
-| `.env.example` | Variable names only |
-
-## Tests
-
-```bash
-python3 -m unittest discover -s tests -t . -v
+python3 -m unittest discover -s tests -t . -v       # tests (synthetic fixture only)
 ```
 
 ## License
 
-[MIT](LICENSE).
+[MIT](LICENSE)
+
+---
+
+## 日本語
+
+ぴよログ（PiyoLog）のデータフィードを保護者本人の AI エージェントが読み取り、授乳・睡眠・おむつの日次サマリーを作るための、非公式のローカルツールです。
+
+**PiyoLog 公式とは関係ありません。** このリポジトリは、保護者が自分で作成したフィードを取得し、自分のマシン上で要約するだけです。
+
+フィード URL はパスワードです。コミットしたり、公開したり、スクリーンショットに残したりしないでください。
+
+### AI エージェント向け
+
+[AGENTS.md](AGENTS.md) を読んで、その手順に従ってください。**Muse** 向けの完全なセットアップ（スキルのインストール、秘密情報の扱い、1日2回の定時実行）が含まれています。スキルファイルは [skills/piyolog/SKILL.md](skills/piyolog/SKILL.md) にあります。
+
+### クイックスタート（人間向け）
+
+Python 3.9 以上が必要です。インストールするものはありません。
+
+1. ぴよログアプリで「設定 → データフィード → 新規作成」。子ども・期間・有効期限を選んで URL をコピーします。API キーは別途なく、URL 自体が認証情報です。
+2. URL は git に入れず、ローカルに保存します。
+
+```bash
+git clone https://github.com/lotuscu/piyolog-briefing.git
+cd piyolog-briefing
+printf '%s\n' 'ここにフィードURL' > .feed_url
+```
+
+（`PIYOLOG_FEED_URL` 環境変数でも可。`.feed_url` と `.env` は gitignore 済みです。）
+
+3. 取得と要約：
+
+```bash
+python3 fetch.py
+python3 summarize.py --days 1
+```
+
+`fetch.py` はスナップショットと重複排除済みストアを `data/` に書きます。無料フィードは直近約24時間分しか返さないため、1日2回程度の実行が目安です。間隔が空くと、取りこぼした記録は二度と戻りません。
+
+### サマリーの内容
+
+現地の1日ごと（タイムゾーンは `PIYOLOG_TZ`、既定は `Asia/Tokyo`。フィードの時刻は UTC）に、種類別ミルク量（ml）、授乳時間（分。ml には換算しません）、睡眠の合計と最長区間（`Sleep` と `WakeUp` をペアにします）、おしっこ・うんちの回数と最長間隔、離乳食（メモから抽出、初出日つき）、最高体温、その他の記録回数を出します。搾乳は「飲んだミルク」には数えません。
+
+### フィードの仕様（公式ガイドより、2026年10月確認）
+
+- [日本語ガイド](https://www.piyolog.com/app/piyolog/data_feed/ja/index.html) · [英語ガイド](https://www.piyolog.com/app/piyolog/data_feed/en/index.html)
+- 無料アカウント：フィード1つ、範囲は約24時間、作成から90日で失効。プレミアムは最大5つ、範囲・期限を拡張できます。
+- 設定は後から変更できません。変更するには取り消して作り直します。
+- HTTP 404 `feed_unavailable` は、失効・取り消し・停止・URL 間違い・子どもの削除のいずれかです。作成直後は1分ほど404になることもあります。
+- 同じ URL へのアクセスは1分に1回程度まで。1日2回で十分です。
+
+### Postgres（任意）
+
+既定はローカルファイルのみで、`summarize.py` が読むのもローカルです。Neon などの自分の Postgres にもコピーしたい場合は [docs/postgres.md](docs/postgres.md) を見てください。接続文字列は絶対にコミットしないでください。
+
+### ライセンス
+
+[MIT](LICENSE)
