@@ -39,3 +39,7 @@ PGDATABASE="$DATABASE_URL" psql -X -w -v ON_ERROR_STOP=1 --single-transaction -f
 The offline exporter is retained for historical backfills: `--all` reads every retained snapshot without contacting the feed or requiring database credentials. `fetch.py --backend postgres` only synchronizes the current response and cannot replace that operation.
 
 The psql fallback passes the connection through the child process environment (`PGDATABASE`), not command-line arguments; SQL is sent through standard input. Environment variables are still secrets and must not be logged. Both backends apply schema and data in one transaction.
+
+## On Muse: HTTPS sync instead of a driver
+
+On Muse a direct Postgres connection cannot leave the machine (egress proxy, port 5432 blocked), and no psycopg/psql is preinstalled. Use `neon_https_sync.py` after `fetch.py`: it posts the same idempotent upsert to Neon's HTTPS SQL endpoint (port 443), reads `DATABASE_URL` from the environment or the gitignored `.env` next to the script (never `source` that file; the URL contains `&`), and needs only the standard library. A least-privilege role without CREATE on schema public gets its schema step skipped with a warning; the tables must exist (created once by the owner).
